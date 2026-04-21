@@ -40,10 +40,11 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   double? activePlaceRating;
 
   String get baseUrl {
-    if (kIsWeb) return "http://localhost:3000";
-    return Theme.of(context).platform == TargetPlatform.android
-        ? "http://10.0.2.2:3000"
-        : "http://localhost:3000";
+    // 1. When testing on your computer (Local):
+    // return kIsWeb ? "http://localhost:3000" : "http://10.0.2.2:3000";
+
+    // 2. When your backend is live on Render (Production):
+    return "https://your-service-name.onrender.com";
   }
 
   final List<Map<String, dynamic>> emergencyServices = [
