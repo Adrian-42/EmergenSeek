@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 
 class EmergencyMapPage extends StatefulWidget {
   const EmergencyMapPage({super.key});
@@ -40,11 +41,14 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   double? activePlaceRating;
 
   String get baseUrl {
-    // 1. When testing on your computer (Local):
-    // return kIsWeb ? "http://localhost:3000" : "http://10.0.2.2:3000";
+    const String renderUrl = "https://your-actual-service-name.onrender.com";
 
-    // 2. When your backend is live on Render (Production):
-    return "https://your-service-name.onrender.com";
+    // Change DebugMode to kDebugMode
+    if (kDebugMode) {
+      // Use localhost for web, 10.0.2.2 for Android Emulator
+      return kIsWeb ? "http://localhost:3000" : "http://10.0.2.2:3000";
+    }
+    return renderUrl;
   }
 
   final List<Map<String, dynamic>> emergencyServices = [
@@ -60,7 +64,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   @override
   void initState() {
     super.initState();
-    _loadOfflineData(); // Load cached data immediately REQ010
+    _loadOfflineData();
     _startTracking();
     sosController = AnimationController(
       vsync: this,
@@ -77,7 +81,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     super.dispose();
   }
 
-  // REQ010: Persistent Storage Logic
   Future<void> _loadOfflineData() async {
     final prefs = await SharedPreferences.getInstance();
     for (var service in emergencyServices) {
@@ -119,8 +122,14 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   }
 
   Future<void> _startTracking() async {
-    LocationPermission p = await Geolocator.requestPermission();
-    if (p == LocationPermission.denied) return;
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    LocationPermission p = await Geolocator.checkPermission();
+    if (p == LocationPermission.denied) {
+      p = await Geolocator.requestPermission();
+      if (p == LocationPermission.denied) return;
+    }
 
     positionStream =
         Geolocator.getPositionStream(
@@ -191,7 +200,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             }
             if (!servicePointer.containsKey(type)) servicePointer[type] = 0;
           });
-          _saveOfflineData(type, results); // Cache successful result
+          _saveOfflineData(type, results);
         }
       }
     } catch (e) {
@@ -235,8 +244,10 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
       if (data["routes"].isEmpty) throw Exception("No route found");
 
       final leg = data["routes"][0]["legs"][0];
-      routeDistance = leg["distance"]["text"];
-      routeDuration = leg["duration"]["text"];
+      setState(() {
+        routeDistance = leg["distance"]["text"];
+        routeDuration = leg["duration"]["text"];
+      });
 
       PolylinePoints pp = PolylinePoints();
       List<PointLatLng> res = pp.decodePolyline(
@@ -248,6 +259,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
 
       _zoomToFit(path);
 
+      // Animated Polyline Drawing
       for (int i = 0; i < path.length; i += (path.length / 10).ceil()) {
         if (!mounted) return;
         await Future.delayed(const Duration(milliseconds: 20));
@@ -425,9 +437,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                         child: FloatingActionButton.extended(
                           heroTag: "sos",
                           backgroundColor: Colors.red,
-                          onPressed: () {
-                            /* Logic for SOS Alert REQ008 */
-                          },
+                          onPressed: () {},
                           label: isDrawing
                               ? const SizedBox(
                                   width: 20,

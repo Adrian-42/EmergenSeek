@@ -5,7 +5,14 @@ const mongoose = require("mongoose"); // Added Mongoose
 require("dotenv").config();
 
 const app = express();
-app.use(cors());
+// Replace app.use(cors()); with this:
+app.use(
+  cors({
+    origin: "*", // This allows all origins (good for development)
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 app.use(express.json());
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
