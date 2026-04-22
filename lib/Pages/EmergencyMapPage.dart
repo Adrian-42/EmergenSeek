@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'SettingsPage.dart'; // Ensure this is imported
 
 class EmergencyMapPage extends StatefulWidget {
   const EmergencyMapPage({super.key});
@@ -34,7 +35,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
 
   bool isDrawing = false;
   bool isFollowingUser = true;
-  bool isAppReady = false; // Controls the loading overlay
+  bool isAppReady = false;
 
   String? routeDistance;
   String? routeDuration;
@@ -43,7 +44,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   String? activePlacePhone;
   bool? activePlaceOpen;
 
-  // Rerouting Variables
   LatLng? activeDestination;
   List<LatLng> currentPath = [];
 
@@ -83,6 +83,44 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     super.dispose();
   }
 
+  // --- SOS LOGIC ---
+  Future<void> _triggerSOS() async {
+    if (currentPosition == null) return;
+
+    // Show immediate feedback
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("🚨 SOS Triggered! Notifying your emergency contacts..."),
+        backgroundColor: Colors.red,
+        duration: Duration(seconds: 3),
+      ),
+    );
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getString('userId');
+
+      // Call your backend SOS route
+      final response = await http.post(
+        Uri.parse("$baseUrl/trigger-sos"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "userId": userId,
+          "lat": currentPosition!.latitude,
+          "lng": currentPosition!.longitude,
+          "locationLink":
+              "https://www.google.com/maps?q=${currentPosition!.latitude},${currentPosition!.longitude}",
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        debugPrint("SOS Sent Successfully");
+      }
+    } catch (e) {
+      debugPrint("SOS Error: $e");
+    }
+  }
+
   // --- TRACKING & REROUTE LOGIC ---
   Future<void> _startTracking() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -94,7 +132,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
       if (p == LocationPermission.denied) return;
     }
 
-    // Immediate fix to reduce startup wait time
     Position firstPos = await Geolocator.getCurrentPosition(
       desiredAccuracy: LocationAccuracy.high,
     );
@@ -103,7 +140,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     positionStream = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // Update every 10 meters
+        distanceFilter: 10,
       ),
     ).listen((pos) => _handleNewPosition(pos));
   }
@@ -111,7 +148,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   void _handleNewPosition(Position pos) {
     if (!mounted) return;
 
-    // Reroute Logic: If navigating and user moves > 50m from the start of the path
     if (activeDestination != null && currentPath.isNotEmpty && !isDrawing) {
       double distanceToPath = Geolocator.distanceBetween(
         pos.latitude,
@@ -149,7 +185,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
       );
     }
 
-    // Initial fetch for all types if they haven't been loaded yet
     if (!isAppReady) {
       for (var s in emergencyServices) {
         _fetchPlaces(s["type"]);
@@ -171,7 +206,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
         final data = jsonDecode(response.body);
         List results = data['results'] ?? [];
 
-        // SORTING: Ensure the nearest is always index 0
         results.sort((a, b) {
           double distA = Geolocator.distanceBetween(
             currentPosition!.latitude,
@@ -193,7 +227,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             allNearbyData[type] = results;
             if (!servicePointer.containsKey(type)) servicePointer[type] = 0;
             _refreshMarkers();
-            isAppReady = true; // Data is ready, remove loader
+            isAppReady = true;
           });
           _saveOfflineData(type, results);
         }
@@ -352,6 +386,32 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: isAppReady
+          ? AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              actions: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: CircleAvatar(
+                    backgroundColor: Colors.white,
+                    child: IconButton(
+                      icon: const Icon(Icons.settings, color: Colors.black87),
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const SettingsPage(),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : null,
       body: Stack(
         children: [
           GoogleMap(
@@ -368,17 +428,16 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             onMapCreated: (c) => mapController = c,
           ),
 
-          // --- STARTUP LOADING OVERLAY ---
           if (!isAppReady)
             Container(
               color: Colors.white.withOpacity(0.9),
-              child: Center(
+              child: const Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const CircularProgressIndicator(color: Colors.red),
-                    const SizedBox(height: 20),
-                    const Text(
+                    CircularProgressIndicator(color: Colors.red),
+                    SizedBox(height: 20),
+                    Text(
                       "Readying Nearest Stations...",
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
@@ -386,17 +445,16 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                         fontSize: 18,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    const Text("Optimizing your GPS location"),
+                    SizedBox(height: 8),
+                    Text("Optimizing your GPS location"),
                   ],
                 ),
               ),
             ),
 
-          // --- ROUTE INFO CARD ---
           if (routeDistance != null && isAppReady)
             Positioned(
-              top: 50,
+              top: 100, // Adjusted for AppBar
               left: 15,
               right: 15,
               child: Card(
@@ -461,7 +519,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
               ),
             ),
 
-          // --- FLOATING SOS & RECENTER ---
           if (isAppReady)
             Positioned(
               bottom: 120,
@@ -471,6 +528,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   FloatingActionButton(
+                    heroTag: "recenter",
                     mini: true,
                     backgroundColor: Colors.white,
                     onPressed: () => setState(() => isFollowingUser = true),
@@ -479,8 +537,9 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                   ScaleTransition(
                     scale: sosAnimation,
                     child: FloatingActionButton.extended(
+                      heroTag: "sos_btn",
                       backgroundColor: Colors.red,
-                      onPressed: () {},
+                      onPressed: _triggerSOS, // Hooked up the SOS logic
                       label: const Text(
                         "SOS",
                         style: TextStyle(
@@ -494,7 +553,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
               ),
             ),
 
-          // --- BOTTOM SERVICE SELECTOR ---
           if (isAppReady)
             Positioned(
               bottom: 0,

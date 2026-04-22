@@ -116,6 +116,34 @@ app.get("/directions", async (req, res) => {
   }
 });
 
+// --- Update Emergency Contacts ---
+app.put("/user/contacts", async (req, res) => {
+  const { userId, contacts } = req.body; // contacts should be an array
+  try {
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { emergencyContacts: contacts },
+      { new: true },
+    );
+    res.json({
+      message: "Contacts updated successfully",
+      contacts: user.emergencyContacts,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update contacts" });
+  }
+});
+
+// --- Get User Profile (to load existing contacts) ---
+app.get("/user/:id", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select("-password");
+    res.json(user);
+  } catch (err) {
+    res.status(404).json({ error: "User not found" });
+  }
+});
+
 // Root / Health check
 app.get("/", (req, res) => {
   res.send("🚀 EmergenSeek Backend is live and sorting by distance!");
