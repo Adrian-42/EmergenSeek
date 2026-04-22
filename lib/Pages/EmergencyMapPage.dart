@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
@@ -40,11 +39,8 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   String? activePlaceName;
   double? activePlaceRating;
 
-  String get baseUrl {
-    const String renderUrl = "https://emergenseek.onrender.com";
-
-    return renderUrl;
-  }
+  // Render Backend URL
+  String get baseUrl => "https://emergenseek.onrender.com";
 
   final List<Map<String, dynamic>> emergencyServices = [
     {"title": "Medical", "icon": Icons.local_hospital, "type": "hospital"},
@@ -61,6 +57,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     super.initState();
     _loadOfflineData();
     _startTracking();
+
     sosController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 1),
@@ -76,6 +73,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     super.dispose();
   }
 
+  // --- DATA PERSISTENCE ---
   Future<void> _loadOfflineData() async {
     final prefs = await SharedPreferences.getInstance();
     for (var service in emergencyServices) {
@@ -83,12 +81,14 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
       String? cached = prefs.getString('offline_data_$type');
       if (cached != null) {
         final List results = jsonDecode(cached);
-        setState(() {
-          allNearbyData[type] = results;
-          for (var p in results) {
-            _addMarker(p, type);
-          }
-        });
+        if (mounted) {
+          setState(() {
+            allNearbyData[type] = results;
+            for (var p in results) {
+              _addMarker(p, type);
+            }
+          });
+        }
       }
     }
   }
@@ -116,6 +116,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     );
   }
 
+  // --- LOCATION TRACKING ---
   Future<void> _startTracking() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) return;
@@ -154,6 +155,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             );
           }
 
+          // Fetch fresh data for all types on location change
           for (var s in emergencyServices) {
             _fetchPlaces(s["type"]);
           }
@@ -162,30 +164,19 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
 
   Future<void> _fetchPlaces(String type) async {
     if (currentPosition == null) return;
-    final url = Uri.parse(
-      "$baseUrl/places?lat=${currentPosition!.latitude}&lng=${currentPosition!.longitude}&type=$type",
-    );
+
+    final String lat = currentPosition!.latitude.toStringAsFixed(6);
+    final String lng = currentPosition!.longitude.toStringAsFixed(6);
+
+    final url = Uri.parse("$baseUrl/places?lat=$lat&lng=$lng&type=$type");
+
     try {
+      // REMOVED the Access-Control-Allow-Origin from headers
       final response = await http.get(url).timeout(const Duration(seconds: 10));
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final List results = data['results'] ?? [];
-
-        results.sort((a, b) {
-          double distA = Geolocator.distanceBetween(
-            currentPosition!.latitude,
-            currentPosition!.longitude,
-            a["geometry"]["location"]["lat"],
-            a["geometry"]["location"]["lng"],
-          );
-          double distB = Geolocator.distanceBetween(
-            currentPosition!.latitude,
-            currentPosition!.longitude,
-            b["geometry"]["location"]["lat"],
-            b["geometry"]["location"]["lng"],
-          );
-          return distA.compareTo(distB);
-        });
 
         if (mounted) {
           setState(() {
@@ -193,22 +184,23 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             for (var p in results) {
               _addMarker(p, type);
             }
-            if (!servicePointer.containsKey(type)) servicePointer[type] = 0;
           });
           _saveOfflineData(type, results);
         }
       }
     } catch (e) {
-      debugPrint("Fetch error: $e");
+      debugPrint("Network error: $e");
     }
   }
 
   void _showNextNearest() {
     if (activeServiceType == null || allNearbyData[activeServiceType!] == null)
       return;
-    int nextIdx =
-        (servicePointer[activeServiceType!]! + 1) %
-        allNearbyData[activeServiceType!]!.length;
+
+    int total = allNearbyData[activeServiceType!]!.length;
+    if (total == 0) return;
+
+    int nextIdx = (servicePointer[activeServiceType!]! + 1) % total;
     setState(() => servicePointer[activeServiceType!] = nextIdx);
 
     var place = allNearbyData[activeServiceType!]![nextIdx];
@@ -222,6 +214,8 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   }
 
   Future<void> _drawRoute(LatLng dest, dynamic placeData) async {
+    if (currentPosition == null) return;
+
     setState(() {
       isDrawing = true;
       polylines.clear();
@@ -230,13 +224,22 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
       activePlaceRating = (placeData["rating"] ?? 0).toDouble();
     });
 
+    final String oLat = currentPosition!.latitude.toStringAsFixed(6);
+    final String oLng = currentPosition!.longitude.toStringAsFixed(6);
+    final String dLat = dest.latitude.toStringAsFixed(6);
+    final String dLng = dest.longitude.toStringAsFixed(6);
+
     final url = Uri.parse(
-      "$baseUrl/directions?origin=${currentPosition!.latitude},${currentPosition!.longitude}&destination=${dest.latitude},${dest.longitude}",
+      "$baseUrl/directions?origin=$oLat,$oLng&destination=$dLat,$dLng",
     );
+
     try {
       final response = await http.get(url);
       final data = jsonDecode(response.body);
-      if (data["routes"].isEmpty) throw Exception("No route found");
+
+      if (data["routes"] == null || data["routes"].isEmpty) {
+        throw Exception("No route found");
+      }
 
       final leg = data["routes"][0]["legs"][0];
       setState(() {
@@ -254,8 +257,12 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
 
       _zoomToFit(path);
 
-      // Animated Polyline Drawing
-      for (int i = 0; i < path.length; i += (path.length / 10).ceil()) {
+      // Smooth animated path drawing
+      for (
+        int i = 0;
+        i < path.length;
+        i += (path.length / 10).ceil().clamp(1, path.length)
+      ) {
         if (!mounted) return;
         await Future.delayed(const Duration(milliseconds: 20));
         setState(() {
@@ -272,10 +279,11 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
       }
       setState(() => isDrawing = false);
     } catch (e) {
+      debugPrint("Route Error: $e");
       setState(() => isDrawing = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Could not draw route.")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Route unavailable. Please try again.")),
+      );
     }
   }
 
@@ -285,6 +293,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     double maxLat = p.map((e) => e.latitude).reduce((a, b) => a > b ? a : b);
     double minLng = p.map((e) => e.longitude).reduce((a, b) => a < b ? a : b);
     double maxLng = p.map((e) => e.longitude).reduce((a, b) => a > b ? a : b);
+
     mapController?.animateCamera(
       CameraUpdate.newLatLngBounds(
         LatLngBounds(
@@ -314,6 +323,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             onMapCreated: (c) => mapController = c,
           ),
 
+          // --- TOP INFO CARD (Visible when route is active) ---
           if (routeDistance != null)
             Positioned(
               top: 50,
@@ -336,7 +346,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  activePlaceName ?? "Unknown",
+                                  activePlaceName ?? "Location Info",
                                   style: const TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 16,
@@ -354,7 +364,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                                     Text(
                                       activePlaceRating != 0
                                           ? activePlaceRating.toString()
-                                          : "No rating",
+                                          : "N/A",
                                       style: const TextStyle(
                                         fontSize: 13,
                                         color: Colors.grey,
@@ -403,6 +413,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
               ),
             ),
 
+          // --- BOTTOM INTERFACE ---
           Positioned(
             bottom: 0,
             left: 0,
@@ -432,7 +443,9 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                         child: FloatingActionButton.extended(
                           heroTag: "sos",
                           backgroundColor: Colors.red,
-                          onPressed: () {},
+                          onPressed: () {
+                            // Add SOS logic here
+                          },
                           label: isDrawing
                               ? const SizedBox(
                                   width: 20,
@@ -481,6 +494,14 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                                     place["geometry"]["location"]["lng"],
                                   ),
                                   place,
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      "Searching for ${s['title']} nearby...",
+                                    ),
+                                  ),
                                 );
                               }
                             },
