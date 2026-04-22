@@ -6,7 +6,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/foundation.dart';
 
 class EmergencyMapPage extends StatefulWidget {
   const EmergencyMapPage({super.key});
@@ -44,9 +43,9 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
 
   final List<Map<String, dynamic>> emergencyServices = [
     {"title": "Medical", "icon": Icons.local_hospital, "type": "hospital"},
-    {"title": "Law Enforcement", "icon": Icons.local_police, "type": "police"},
+    {"title": "Police", "icon": Icons.local_police, "type": "police"},
     {
-      "title": "Fire-related",
+      "title": "Fire Dept",
       "icon": Icons.local_fire_department,
       "type": "fire_station",
     },
@@ -84,9 +83,8 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
         if (mounted) {
           setState(() {
             allNearbyData[type] = results;
-            for (var p in results) {
-              _addMarker(p, type);
-            }
+            servicePointer[type] = 0;
+            _refreshMarkers();
           });
         }
       }
@@ -98,22 +96,35 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     await prefs.setString('offline_data_$type', jsonEncode(data));
   }
 
-  void _addMarker(dynamic p, String type) {
-    markers.add(
-      Marker(
-        markerId: MarkerId(p["place_id"]),
-        position: LatLng(
-          p["geometry"]["location"]["lat"],
-          p["geometry"]["location"]["lng"],
-        ),
-        infoWindow: InfoWindow(title: p["name"]),
-        icon: BitmapDescriptor.defaultMarkerWithHue(
-          type == "hospital"
-              ? BitmapDescriptor.hueRed
-              : BitmapDescriptor.hueAzure,
-        ),
-      ),
-    );
+  void _refreshMarkers() {
+    Set<Marker> newMarkers = {};
+    allNearbyData.forEach((type, results) {
+      for (var p in results) {
+        newMarkers.add(
+          Marker(
+            markerId: MarkerId(p["place_id"]),
+            position: LatLng(
+              p["geometry"]["location"]["lat"],
+              p["geometry"]["location"]["lng"],
+            ),
+            infoWindow: InfoWindow(
+              title: p["name"],
+              snippet: "Rating: ${p["rating"] ?? 'N/A'}",
+            ),
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+              type == "hospital"
+                  ? BitmapDescriptor.hueRed
+                  : type == "police"
+                  ? BitmapDescriptor.hueAzure
+                  : BitmapDescriptor.hueOrange,
+            ),
+          ),
+        );
+      }
+    });
+    setState(() {
+      markers = newMarkers;
+    });
   }
 
   // --- LOCATION TRACKING ---
@@ -131,7 +142,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
         Geolocator.getPositionStream(
           locationSettings: const LocationSettings(
             accuracy: LocationAccuracy.high,
-            distanceFilter: 10,
+            distanceFilter: 15,
           ),
         ).listen((pos) {
           if (!mounted) return;
@@ -139,9 +150,9 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             currentPosition = pos;
             circles = {
               Circle(
-                circleId: const CircleId("u"),
+                circleId: const CircleId("user_loc"),
                 center: LatLng(pos.latitude, pos.longitude),
-                radius: 12,
+                radius: 20,
                 fillColor: Colors.blue.withOpacity(0.2),
                 strokeColor: Colors.blue,
                 strokeWidth: 2,
@@ -149,13 +160,12 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             };
           });
 
-          if (isFollowingUser && !isDrawing && routeDistance == null) {
+          if (isFollowingUser && !isDrawing) {
             mapController?.animateCamera(
               CameraUpdate.newLatLng(LatLng(pos.latitude, pos.longitude)),
             );
           }
 
-          // Fetch fresh data for all types on location change
           for (var s in emergencyServices) {
             _fetchPlaces(s["type"]);
           }
@@ -167,12 +177,10 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
 
     final String lat = currentPosition!.latitude.toStringAsFixed(6);
     final String lng = currentPosition!.longitude.toStringAsFixed(6);
-
     final url = Uri.parse("$baseUrl/places?lat=$lat&lng=$lng&type=$type");
 
     try {
-      // REMOVED the Access-Control-Allow-Origin from headers
-      final response = await http.get(url).timeout(const Duration(seconds: 10));
+      final response = await http.get(url).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -181,15 +189,14 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
         if (mounted) {
           setState(() {
             allNearbyData[type] = results;
-            for (var p in results) {
-              _addMarker(p, type);
-            }
+            if (!servicePointer.containsKey(type)) servicePointer[type] = 0;
+            _refreshMarkers();
           });
           _saveOfflineData(type, results);
         }
       }
     } catch (e) {
-      debugPrint("Network error: $e");
+      debugPrint("Fetch error: $e");
     }
   }
 
@@ -200,7 +207,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     int total = allNearbyData[activeServiceType!]!.length;
     if (total == 0) return;
 
-    int nextIdx = (servicePointer[activeServiceType!]! + 1) % total;
+    int nextIdx = ((servicePointer[activeServiceType!] ?? 0) + 1) % total;
     setState(() => servicePointer[activeServiceType!] = nextIdx);
 
     var place = allNearbyData[activeServiceType!]![nextIdx];
@@ -257,18 +264,18 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
 
       _zoomToFit(path);
 
-      // Smooth animated path drawing
+      // Smooth path drawing
       for (
         int i = 0;
         i < path.length;
         i += (path.length / 10).ceil().clamp(1, path.length)
       ) {
         if (!mounted) return;
-        await Future.delayed(const Duration(milliseconds: 20));
+        await Future.delayed(const Duration(milliseconds: 30));
         setState(() {
           polylines = {
             Polyline(
-              polylineId: const PolylineId("r"),
+              polylineId: const PolylineId("route_line"),
               points: path.sublist(0, (i + 1).clamp(0, path.length)),
               color: Colors.blueAccent,
               width: 6,
@@ -282,7 +289,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
       debugPrint("Route Error: $e");
       setState(() => isDrawing = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Route unavailable. Please try again.")),
+        const SnackBar(content: Text("Could not calculate route.")),
       );
     }
   }
@@ -320,71 +327,51 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             circles: circles,
             myLocationEnabled: true,
             myLocationButtonEnabled: false,
-            onMapCreated: (c) => mapController = c,
+            onMapCreated: (c) {
+              mapController = c;
+              if (currentPosition != null) {
+                mapController?.animateCamera(
+                  CameraUpdate.newLatLng(
+                    LatLng(
+                      currentPosition!.latitude,
+                      currentPosition!.longitude,
+                    ),
+                  ),
+                );
+              }
+            },
           ),
-
-          // --- TOP INFO CARD (Visible when route is active) ---
           if (routeDistance != null)
             Positioned(
               top: 50,
               left: 15,
               right: 15,
               child: Card(
-                elevation: 10,
+                elevation: 8,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(15),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.all(15),
+                  padding: const EdgeInsets.all(12),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  activePlaceName ?? "Location Info",
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                Row(
-                                  children: [
-                                    const Icon(
-                                      Icons.star,
-                                      color: Colors.amber,
-                                      size: 16,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      activePlaceRating != 0
-                                          ? activePlaceRating.toString()
-                                          : "N/A",
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        color: Colors.grey,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, color: Colors.red),
-                            onPressed: () => setState(() {
-                              routeDistance = null;
-                              polylines.clear();
-                              activeServiceType = null;
-                              isFollowingUser = true;
-                            }),
-                          ),
-                        ],
+                      ListTile(
+                        title: Text(
+                          activePlaceName ?? "Location",
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Text(
+                          "Rating: ${activePlaceRating ?? 'N/A'} ⭐",
+                        ),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.close, color: Colors.red),
+                          onPressed: () => setState(() {
+                            routeDistance = null;
+                            polylines.clear();
+                            isFollowingUser = true;
+                          }),
+                        ),
                       ),
                       const Divider(),
                       Row(
@@ -399,11 +386,8 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                           ),
                           TextButton.icon(
                             onPressed: isDrawing ? null : _showNextNearest,
-                            icon: const Icon(Icons.refresh, size: 16),
-                            label: const Text(
-                              "Next Nearest",
-                              style: TextStyle(fontSize: 12),
-                            ),
+                            icon: const Icon(Icons.navigate_next),
+                            label: const Text("Next"),
                           ),
                         ],
                       ),
@@ -412,27 +396,34 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                 ),
               ),
             ),
-
-          // --- BOTTOM INTERFACE ---
           Positioned(
-            bottom: 0,
+            bottom: 30,
             left: 0,
             right: 0,
             child: Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       FloatingActionButton(
-                        heroTag: "loc",
+                        heroTag: "recenter",
                         mini: true,
                         backgroundColor: Colors.white,
-                        onPressed: () => setState(() => isFollowingUser = true),
+                        onPressed: () {
+                          setState(() => isFollowingUser = true);
+                          if (currentPosition != null) {
+                            mapController?.animateCamera(
+                              CameraUpdate.newLatLng(
+                                LatLng(
+                                  currentPosition!.latitude,
+                                  currentPosition!.longitude,
+                                ),
+                              ),
+                            );
+                          }
+                        },
                         child: const Icon(
                           Icons.my_location,
                           color: Colors.blue,
@@ -441,31 +432,24 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                       ScaleTransition(
                         scale: sosAnimation,
                         child: FloatingActionButton.extended(
-                          heroTag: "sos",
+                          heroTag: "sos_btn",
                           backgroundColor: Colors.red,
-                          onPressed: () {
-                            // Add SOS logic here
-                          },
-                          label: isDrawing
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Text(
-                                  "SOS",
-                                  style: TextStyle(fontWeight: FontWeight.bold),
-                                ),
+                          onPressed: () {},
+                          label: const Text(
+                            "SOS",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                            ),
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(height: 15),
                 Container(
-                  padding: const EdgeInsets.only(top: 20, bottom: 30),
+                  padding: const EdgeInsets.symmetric(vertical: 20),
                   decoration: const BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.vertical(
@@ -477,54 +461,48 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: emergencyServices
-                        .map(
-                          (s) => InkWell(
-                            onTap: () {
-                              activeServiceType = s["type"];
-                              if (allNearbyData[activeServiceType!] != null &&
-                                  allNearbyData[activeServiceType!]!
-                                      .isNotEmpty) {
-                                servicePointer[activeServiceType!] = 0;
-                                var place =
-                                    allNearbyData[activeServiceType!]![0];
-                                _drawRoute(
-                                  LatLng(
-                                    place["geometry"]["location"]["lat"],
-                                    place["geometry"]["location"]["lng"],
-                                  ),
-                                  place,
-                                );
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      "Searching for ${s['title']} nearby...",
-                                    ),
-                                  ),
-                                );
-                              }
-                            },
-                            child: Column(
-                              children: [
-                                CircleAvatar(
-                                  radius: 28,
-                                  backgroundColor: Colors.red.withOpacity(0.1),
-                                  child: Icon(s["icon"], color: Colors.red),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  s["title"],
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
+                    children: emergencyServices.map((s) {
+                      return InkWell(
+                        onTap: () {
+                          activeServiceType = s["type"];
+                          if (allNearbyData[activeServiceType!]?.isNotEmpty ??
+                              false) {
+                            servicePointer[activeServiceType!] = 0;
+                            var place = allNearbyData[activeServiceType!]![0];
+                            _drawRoute(
+                              LatLng(
+                                place["geometry"]["location"]["lat"],
+                                place["geometry"]["location"]["lng"],
+                              ),
+                              place,
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text("Searching for ${s['title']}..."),
+                              ),
+                            );
+                          }
+                        },
+                        child: Column(
+                          children: [
+                            CircleAvatar(
+                              radius: 28,
+                              backgroundColor: Colors.red.withOpacity(0.1),
+                              child: Icon(s["icon"], color: Colors.red),
                             ),
-                          ),
-                        )
-                        .toList(),
+                            const SizedBox(height: 5),
+                            Text(
+                              s["title"],
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
                   ),
                 ),
               ],

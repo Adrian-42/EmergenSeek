@@ -7,10 +7,9 @@ require("dotenv").config();
 const app = express();
 
 // --- CORS CONFIGURATION ---
-// This configuration allows Flutter Web to communicate without "Preflight" blocks
 app.use(
   cors({
-    origin: "*", // Allows all origins
+    origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
@@ -24,7 +23,8 @@ app.use(
 
 app.use(express.json());
 
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+// Note: Ensure GOOGLE_API_KEY is set in your Render Environment Variables
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 
 // --- MONGODB CONNECTION ---
@@ -47,24 +47,34 @@ app.get("/places", async (req, res) => {
       .json({ error: "Missing parameters: lat, lng, and type are required." });
   }
 
-  try {
-    // Rounding coordinates to prevent floating point errors in URL
-    const cleanLat = parseFloat(lat).toFixed(6);
-    const cleanLng = parseFloat(lng).toFixed(6);
+  if (!GOOGLE_MAPS_API_KEY) {
+    console.error(
+      "❌ API KEY MISSING: Check your .env or Render Environment Variables.",
+    );
+    return res
+      .status(500)
+      .json({ error: "Server API Key configuration error." });
+  }
 
-    const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${cleanLat},${cleanLng}&radius=5000&type=${type}&key=${GOOGLE_MAPS_API_KEY}`;
+  try {
+    // Constructing the URL for the Places API (Nearby Search)
+    const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=5000&type=${type}&key=${GOOGLE_MAPS_API_KEY}`;
 
     const response = await axios.get(url);
 
+    // If Google returns an error status (like REQUEST_DENIED)
     if (
       response.data.status !== "OK" &&
       response.data.status !== "ZERO_RESULTS"
     ) {
-      console.error("Google Places Error Status:", response.data.status);
+      console.error(`❌ Google Places API Error: ${response.data.status}`);
+      console.error(
+        `Reason: ${response.data.error_message || "No specific message provided"}`,
+      );
+
       return res.status(400).json({
-        error:
-          response.data.error_message ||
-          `Google Error: ${response.data.status}`,
+        status: response.data.status,
+        error: response.data.error_message || "Google API request was denied.",
       });
     }
 
@@ -74,7 +84,7 @@ app.get("/places", async (req, res) => {
     });
   } catch (error) {
     console.error("Places Fetch Error:", error.message);
-    res.status(500).json({ error: "Server error fetching places" });
+    res.status(500).json({ error: "Internal server error fetching places" });
   }
 });
 
@@ -94,12 +104,14 @@ app.get("/directions", async (req, res) => {
     const response = await axios.get(url);
 
     if (response.data.status !== "OK") {
-      console.log(`❌ Directions Failed: ${response.data.status}`);
+      console.error(`❌ Directions API Error: ${response.data.status}`);
+      console.error(
+        `Reason: ${response.data.error_message || "No specific message provided"}`,
+      );
+
       return res.status(400).json({
-        error:
-          response.data.error_message ||
-          `Google Error: ${response.data.status}`,
         status: response.data.status,
+        error: response.data.error_message || "Directions request was denied.",
       });
     }
 
@@ -110,7 +122,7 @@ app.get("/directions", async (req, res) => {
   }
 });
 
-// Root route for health check
+// Health check route
 app.get("/", (req, res) => {
   res.send("🚀 EmergenSeek Backend is running!");
 });
