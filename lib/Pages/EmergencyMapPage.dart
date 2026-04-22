@@ -41,13 +41,8 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   double? activePlaceRating;
 
   String get baseUrl {
-    const String renderUrl = "https://your-actual-service-name.onrender.com";
+    const String renderUrl = "https://emergenseek.onrender.com";
 
-    // Change DebugMode to kDebugMode
-    if (kDebugMode) {
-      // Use localhost for web, 10.0.2.2 for Android Emulator
-      return kIsWeb ? "http://localhost:3000" : "http://10.0.2.2:3000";
-    }
     return renderUrl;
   }
 
