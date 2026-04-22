@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 require("dotenv").config();
 const authRoutes = require("./routes/auth");
 const nodemailer = require("nodemailer");
+const User = require("./models/User");
 
 const app = express();
 
