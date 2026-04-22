@@ -1,13 +1,15 @@
+const express = require("express");
+const router = express.Router(); // Use Router instead of app
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const User = require("./models/User"); // Adjust path as needed
+const User = require("../models/User"); // Check this path!
 
 // REGISTER
-app.post("/register", async (req, res) => {
+router.post("/register", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { name, email, password } = req.body; // Added name
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({ email, password: hashedPassword });
+    const newUser = new User({ name, email, password: hashedPassword });
     await newUser.save();
     res.status(201).json({ message: "User created" });
   } catch (err) {
@@ -16,7 +18,7 @@ app.post("/register", async (req, res) => {
 });
 
 // LOGIN
-app.post("/login", async (req, res) => {
+router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
@@ -25,11 +27,17 @@ app.post("/login", async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
 
-    const token = jwt.sign({ id: user._id }, "YOUR_SECRET_KEY", {
-      expiresIn: "7d",
-    });
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET || "YOUR_SECRET_KEY",
+      {
+        expiresIn: "7d",
+      },
+    );
     res.json({ token, userId: user._id, email: user.email });
   } catch (err) {
     res.status(500).json({ error: "Server error" });
   }
 });
+
+module.exports = router; // REQUIRED: Export the router

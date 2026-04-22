@@ -3,6 +3,7 @@ const axios = require("axios");
 const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
+const authRoutes = require("./routes/auth");
 
 const app = express();
 
@@ -26,6 +27,9 @@ app.use(express.json());
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
+
+// --- AUTH ROUTES ---
+app.use("/", authRoutes);
 
 // --- MONGODB CONNECTION ---
 if (MONGO_URI) {
