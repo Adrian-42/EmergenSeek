@@ -7,6 +7,7 @@ require("dotenv").config();
 const app = express();
 
 // --- CORS CONFIGURATION ---
+// Origins are set to "*" for development flexibility with Flutter/Web
 app.use(
   cors({
     origin: "*",
@@ -23,7 +24,6 @@ app.use(
 
 app.use(express.json());
 
-// Note: Ensure GOOGLE_API_KEY is set in your Render Environment Variables
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 
@@ -37,7 +37,7 @@ if (MONGO_URI) {
   console.warn("⚠️ MONGO_URI not found in environment variables.");
 }
 
-// 1. Fetch Nearby Emergency Places
+// 1. Fetch Nearby Emergency Places (Optimized for Nearest)
 app.get("/places", async (req, res) => {
   const { lat, lng, type } = req.query;
 
@@ -48,36 +48,33 @@ app.get("/places", async (req, res) => {
   }
 
   if (!GOOGLE_MAPS_API_KEY) {
-    console.error(
-      "❌ API KEY MISSING: Check your .env or Render Environment Variables.",
-    );
     return res
       .status(500)
-      .json({ error: "Server API Key configuration error." });
+      .json({ error: "Google API Key is not configured on the server." });
   }
 
   try {
-    // Constructing the URL for the Places API (Nearby Search)
-    const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=5000&type=${type}&key=${GOOGLE_MAPS_API_KEY}`;
+    /**
+     * rankby=distance: Returns results in order of proximity.
+     * Note: 'radius' MUST NOT be used when 'rankby=distance' is present.
+     */
+    const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&rankby=distance&type=${type}&key=${GOOGLE_MAPS_API_KEY}`;
 
     const response = await axios.get(url);
 
-    // If Google returns an error status (like REQUEST_DENIED)
+    // Validation for Google-specific error statuses
     if (
       response.data.status !== "OK" &&
       response.data.status !== "ZERO_RESULTS"
     ) {
       console.error(`❌ Google Places API Error: ${response.data.status}`);
-      console.error(
-        `Reason: ${response.data.error_message || "No specific message provided"}`,
-      );
-
       return res.status(400).json({
         status: response.data.status,
         error: response.data.error_message || "Google API request was denied.",
       });
     }
 
+    // Return results to Flutter
     res.json({
       results: response.data.results || [],
       status: response.data.status,
@@ -88,7 +85,7 @@ app.get("/places", async (req, res) => {
   }
 });
 
-// 2. Fetch Directions
+// 2. Fetch Directions (Driving Mode)
 app.get("/directions", async (req, res) => {
   const { origin, destination } = req.query;
 
@@ -99,16 +96,13 @@ app.get("/directions", async (req, res) => {
   }
 
   try {
+    // mode=driving is essential for emergency routing
     const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`;
 
     const response = await axios.get(url);
 
     if (response.data.status !== "OK") {
       console.error(`❌ Directions API Error: ${response.data.status}`);
-      console.error(
-        `Reason: ${response.data.error_message || "No specific message provided"}`,
-      );
-
       return res.status(400).json({
         status: response.data.status,
         error: response.data.error_message || "Directions request was denied.",
@@ -122,12 +116,12 @@ app.get("/directions", async (req, res) => {
   }
 });
 
-// Health check route
+// Root / Health check
 app.get("/", (req, res) => {
-  res.send("🚀 EmergenSeek Backend is running!");
+  res.send("🚀 EmergenSeek Backend is live and sorting by distance!");
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server live on port ${PORT}`);
+  console.log(`🚀 Server listening on port ${PORT}`);
 });

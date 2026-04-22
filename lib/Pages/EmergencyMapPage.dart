@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class EmergencyMapPage extends StatefulWidget {
   const EmergencyMapPage({super.key});
@@ -30,15 +31,22 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
 
   late AnimationController sosController;
   late Animation<double> sosAnimation;
+
   bool isDrawing = false;
   bool isFollowingUser = true;
+  bool isAppReady = false; // Controls the loading overlay
 
   String? routeDistance;
   String? routeDuration;
   String? activePlaceName;
   double? activePlaceRating;
+  String? activePlacePhone;
+  bool? activePlaceOpen;
 
-  // Render Backend URL
+  // Rerouting Variables
+  LatLng? activeDestination;
+  List<LatLng> currentPath = [];
+
   String get baseUrl => "https://emergenseek.onrender.com";
 
   final List<Map<String, dynamic>> emergencyServices = [
@@ -54,14 +62,17 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   @override
   void initState() {
     super.initState();
-    _loadOfflineData();
-    _startTracking();
-
+    _initApp();
     sosController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 1),
     )..repeat(reverse: true);
     sosAnimation = Tween<double>(begin: 1.0, end: 1.15).animate(sosController);
+  }
+
+  Future<void> _initApp() async {
+    await _loadOfflineData();
+    await _startTracking();
   }
 
   @override
@@ -72,28 +83,206 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     super.dispose();
   }
 
-  // --- DATA PERSISTENCE ---
-  Future<void> _loadOfflineData() async {
-    final prefs = await SharedPreferences.getInstance();
-    for (var service in emergencyServices) {
-      String type = service["type"];
-      String? cached = prefs.getString('offline_data_$type');
-      if (cached != null) {
-        final List results = jsonDecode(cached);
-        if (mounted) {
-          setState(() {
-            allNearbyData[type] = results;
-            servicePointer[type] = 0;
-            _refreshMarkers();
-          });
-        }
+  // --- TRACKING & REROUTE LOGIC ---
+  Future<void> _startTracking() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    LocationPermission p = await Geolocator.checkPermission();
+    if (p == LocationPermission.denied) {
+      p = await Geolocator.requestPermission();
+      if (p == LocationPermission.denied) return;
+    }
+
+    // Immediate fix to reduce startup wait time
+    Position firstPos = await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+    _handleNewPosition(firstPos);
+
+    positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10, // Update every 10 meters
+      ),
+    ).listen((pos) => _handleNewPosition(pos));
+  }
+
+  void _handleNewPosition(Position pos) {
+    if (!mounted) return;
+
+    // Reroute Logic: If navigating and user moves > 50m from the start of the path
+    if (activeDestination != null && currentPath.isNotEmpty && !isDrawing) {
+      double distanceToPath = Geolocator.distanceBetween(
+        pos.latitude,
+        pos.longitude,
+        currentPath.first.latitude,
+        currentPath.first.longitude,
+      );
+
+      if (distanceToPath > 50) {
+        _drawRoute(activeDestination!, {
+          "name": activePlaceName,
+          "rating": activePlaceRating,
+          "formatted_phone_number": activePlacePhone,
+        });
+      }
+    }
+
+    setState(() {
+      currentPosition = pos;
+      circles = {
+        Circle(
+          circleId: const CircleId("user_loc"),
+          center: LatLng(pos.latitude, pos.longitude),
+          radius: 15,
+          fillColor: Colors.blue.withOpacity(0.2),
+          strokeColor: Colors.blue,
+          strokeWidth: 2,
+        ),
+      };
+    });
+
+    if (isFollowingUser && !isDrawing) {
+      mapController?.animateCamera(
+        CameraUpdate.newLatLng(LatLng(pos.latitude, pos.longitude)),
+      );
+    }
+
+    // Initial fetch for all types if they haven't been loaded yet
+    if (!isAppReady) {
+      for (var s in emergencyServices) {
+        _fetchPlaces(s["type"]);
       }
     }
   }
 
-  Future<void> _saveOfflineData(String type, List data) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('offline_data_$type', jsonEncode(data));
+  // --- FETCH & SORT NEAREST ---
+  Future<void> _fetchPlaces(String type) async {
+    if (currentPosition == null) return;
+
+    final String lat = currentPosition!.latitude.toStringAsFixed(6);
+    final String lng = currentPosition!.longitude.toStringAsFixed(6);
+    final url = Uri.parse("$baseUrl/places?lat=$lat&lng=$lng&type=$type");
+
+    try {
+      final response = await http.get(url).timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        List results = data['results'] ?? [];
+
+        // SORTING: Ensure the nearest is always index 0
+        results.sort((a, b) {
+          double distA = Geolocator.distanceBetween(
+            currentPosition!.latitude,
+            currentPosition!.longitude,
+            a["geometry"]["location"]["lat"],
+            a["geometry"]["location"]["lng"],
+          );
+          double distB = Geolocator.distanceBetween(
+            currentPosition!.latitude,
+            currentPosition!.longitude,
+            b["geometry"]["location"]["lat"],
+            b["geometry"]["location"]["lng"],
+          );
+          return distA.compareTo(distB);
+        });
+
+        if (mounted) {
+          setState(() {
+            allNearbyData[type] = results;
+            if (!servicePointer.containsKey(type)) servicePointer[type] = 0;
+            _refreshMarkers();
+            isAppReady = true; // Data is ready, remove loader
+          });
+          _saveOfflineData(type, results);
+        }
+      }
+    } catch (e) {
+      debugPrint("Fetch error: $e");
+    }
+  }
+
+  // --- ROUTE DRAWING ---
+  Future<void> _drawRoute(LatLng dest, dynamic placeData) async {
+    if (currentPosition == null) return;
+
+    setState(() {
+      isDrawing = true;
+      activeDestination = dest;
+      activePlaceName = placeData["name"];
+      activePlaceRating = (placeData["rating"] ?? 0).toDouble();
+      activePlacePhone = placeData["formatted_phone_number"];
+      activePlaceOpen = placeData["opening_hours"]?["open_now"];
+    });
+
+    final url = Uri.parse(
+      "$baseUrl/directions?origin=${currentPosition!.latitude},${currentPosition!.longitude}&destination=${dest.latitude},${dest.longitude}",
+    );
+
+    try {
+      final response = await http.get(url);
+      final data = jsonDecode(response.body);
+
+      if (data["routes"] == null || data["routes"].isEmpty) return;
+
+      final leg = data["routes"][0]["legs"][0];
+      PolylinePoints pp = PolylinePoints();
+      List<PointLatLng> res = pp.decodePolyline(
+        data["routes"][0]["overview_polyline"]["points"],
+      );
+
+      setState(() {
+        routeDistance = leg["distance"]["text"];
+        routeDuration = leg["duration"]["text"];
+        currentPath = res.map((p) => LatLng(p.latitude, p.longitude)).toList();
+
+        polylines = {
+          Polyline(
+            polylineId: const PolylineId("route_line"),
+            points: currentPath,
+            color: Colors.redAccent,
+            width: 8,
+            jointType: JointType.round,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+          ),
+        };
+        isDrawing = false;
+        isFollowingUser = false;
+      });
+      _zoomToFit(currentPath);
+    } catch (e) {
+      debugPrint("Routing error: $e");
+      setState(() => isDrawing = false);
+    }
+  }
+
+  // --- HELPERS ---
+  Future<void> _makeCall(String? phoneNumber) async {
+    if (phoneNumber == null) return;
+    final Uri url = Uri.parse("tel:$phoneNumber");
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url);
+    }
+  }
+
+  void _showNextNearest() {
+    if (activeServiceType == null) return;
+    List? data = allNearbyData[activeServiceType!];
+    if (data == null || data.isEmpty) return;
+
+    int nextIdx = ((servicePointer[activeServiceType!] ?? 0) + 1) % data.length;
+    setState(() => servicePointer[activeServiceType!] = nextIdx);
+
+    var place = data[nextIdx];
+    _drawRoute(
+      LatLng(
+        place["geometry"]["location"]["lat"],
+        place["geometry"]["location"]["lng"],
+      ),
+      place,
+    );
   }
 
   void _refreshMarkers() {
@@ -107,10 +296,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
               p["geometry"]["location"]["lat"],
               p["geometry"]["location"]["lng"],
             ),
-            infoWindow: InfoWindow(
-              title: p["name"],
-              snippet: "Rating: ${p["rating"] ?? 'N/A'}",
-            ),
+            infoWindow: InfoWindow(title: p["name"]),
             icon: BitmapDescriptor.defaultMarkerWithHue(
               type == "hospital"
                   ? BitmapDescriptor.hueRed
@@ -122,176 +308,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
         );
       }
     });
-    setState(() {
-      markers = newMarkers;
-    });
-  }
-
-  // --- LOCATION TRACKING ---
-  Future<void> _startTracking() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return;
-
-    LocationPermission p = await Geolocator.checkPermission();
-    if (p == LocationPermission.denied) {
-      p = await Geolocator.requestPermission();
-      if (p == LocationPermission.denied) return;
-    }
-
-    positionStream =
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 15,
-          ),
-        ).listen((pos) {
-          if (!mounted) return;
-          setState(() {
-            currentPosition = pos;
-            circles = {
-              Circle(
-                circleId: const CircleId("user_loc"),
-                center: LatLng(pos.latitude, pos.longitude),
-                radius: 20,
-                fillColor: Colors.blue.withOpacity(0.2),
-                strokeColor: Colors.blue,
-                strokeWidth: 2,
-              ),
-            };
-          });
-
-          if (isFollowingUser && !isDrawing) {
-            mapController?.animateCamera(
-              CameraUpdate.newLatLng(LatLng(pos.latitude, pos.longitude)),
-            );
-          }
-
-          for (var s in emergencyServices) {
-            _fetchPlaces(s["type"]);
-          }
-        });
-  }
-
-  Future<void> _fetchPlaces(String type) async {
-    if (currentPosition == null) return;
-
-    final String lat = currentPosition!.latitude.toStringAsFixed(6);
-    final String lng = currentPosition!.longitude.toStringAsFixed(6);
-    final url = Uri.parse("$baseUrl/places?lat=$lat&lng=$lng&type=$type");
-
-    try {
-      final response = await http.get(url).timeout(const Duration(seconds: 15));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final List results = data['results'] ?? [];
-
-        if (mounted) {
-          setState(() {
-            allNearbyData[type] = results;
-            if (!servicePointer.containsKey(type)) servicePointer[type] = 0;
-            _refreshMarkers();
-          });
-          _saveOfflineData(type, results);
-        }
-      }
-    } catch (e) {
-      debugPrint("Fetch error: $e");
-    }
-  }
-
-  void _showNextNearest() {
-    if (activeServiceType == null || allNearbyData[activeServiceType!] == null)
-      return;
-
-    int total = allNearbyData[activeServiceType!]!.length;
-    if (total == 0) return;
-
-    int nextIdx = ((servicePointer[activeServiceType!] ?? 0) + 1) % total;
-    setState(() => servicePointer[activeServiceType!] = nextIdx);
-
-    var place = allNearbyData[activeServiceType!]![nextIdx];
-    _drawRoute(
-      LatLng(
-        place["geometry"]["location"]["lat"],
-        place["geometry"]["location"]["lng"],
-      ),
-      place,
-    );
-  }
-
-  Future<void> _drawRoute(LatLng dest, dynamic placeData) async {
-    if (currentPosition == null) return;
-
-    setState(() {
-      isDrawing = true;
-      polylines.clear();
-      isFollowingUser = false;
-      activePlaceName = placeData["name"];
-      activePlaceRating = (placeData["rating"] ?? 0).toDouble();
-    });
-
-    final String oLat = currentPosition!.latitude.toStringAsFixed(6);
-    final String oLng = currentPosition!.longitude.toStringAsFixed(6);
-    final String dLat = dest.latitude.toStringAsFixed(6);
-    final String dLng = dest.longitude.toStringAsFixed(6);
-
-    final url = Uri.parse(
-      "$baseUrl/directions?origin=$oLat,$oLng&destination=$dLat,$dLng",
-    );
-
-    try {
-      final response = await http.get(url);
-      final data = jsonDecode(response.body);
-
-      if (data["routes"] == null || data["routes"].isEmpty) {
-        throw Exception("No route found");
-      }
-
-      final leg = data["routes"][0]["legs"][0];
-      setState(() {
-        routeDistance = leg["distance"]["text"];
-        routeDuration = leg["duration"]["text"];
-      });
-
-      PolylinePoints pp = PolylinePoints();
-      List<PointLatLng> res = pp.decodePolyline(
-        data["routes"][0]["overview_polyline"]["points"],
-      );
-      List<LatLng> path = res
-          .map((p) => LatLng(p.latitude, p.longitude))
-          .toList();
-
-      _zoomToFit(path);
-
-      // Smooth path drawing
-      for (
-        int i = 0;
-        i < path.length;
-        i += (path.length / 10).ceil().clamp(1, path.length)
-      ) {
-        if (!mounted) return;
-        await Future.delayed(const Duration(milliseconds: 30));
-        setState(() {
-          polylines = {
-            Polyline(
-              polylineId: const PolylineId("route_line"),
-              points: path.sublist(0, (i + 1).clamp(0, path.length)),
-              color: Colors.blueAccent,
-              width: 6,
-              jointType: JointType.round,
-            ),
-          };
-        });
-      }
-      setState(() => isDrawing = false);
-    } catch (e) {
-      debugPrint("Route Error: $e");
-      setState(() => isDrawing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Could not calculate route.")),
-      );
-    }
+    setState(() => markers = newMarkers);
   }
 
   void _zoomToFit(List<LatLng> p) {
@@ -312,6 +329,26 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     );
   }
 
+  Future<void> _loadOfflineData() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (var service in emergencyServices) {
+      String type = service["type"];
+      String? cached = prefs.getString('offline_data_$type');
+      if (cached != null) {
+        setState(() {
+          allNearbyData[type] = jsonDecode(cached);
+          servicePointer[type] = 0;
+          _refreshMarkers();
+        });
+      }
+    }
+  }
+
+  Future<void> _saveOfflineData(String type, List data) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('offline_data_$type', jsonEncode(data));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -327,67 +364,94 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
             circles: circles,
             myLocationEnabled: true,
             myLocationButtonEnabled: false,
-            onMapCreated: (c) {
-              mapController = c;
-              if (currentPosition != null) {
-                mapController?.animateCamera(
-                  CameraUpdate.newLatLng(
-                    LatLng(
-                      currentPosition!.latitude,
-                      currentPosition!.longitude,
-                    ),
-                  ),
-                );
-              }
-            },
+            trafficEnabled: true,
+            onMapCreated: (c) => mapController = c,
           ),
-          if (routeDistance != null)
+
+          // --- STARTUP LOADING OVERLAY ---
+          if (!isAppReady)
+            Container(
+              color: Colors.white.withOpacity(0.9),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(color: Colors.red),
+                    const SizedBox(height: 20),
+                    const Text(
+                      "Readying Nearest Stations...",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.red,
+                        fontSize: 18,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text("Optimizing your GPS location"),
+                  ],
+                ),
+              ),
+            ),
+
+          // --- ROUTE INFO CARD ---
+          if (routeDistance != null && isAppReady)
             Positioned(
               top: 50,
               left: 15,
               right: 15,
               child: Card(
-                elevation: 8,
+                elevation: 10,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(15),
+                  borderRadius: BorderRadius.circular(20),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(15),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       ListTile(
+                        contentPadding: EdgeInsets.zero,
                         title: Text(
-                          activePlaceName ?? "Location",
+                          activePlaceName ?? "Searching...",
                           style: const TextStyle(fontWeight: FontWeight.bold),
                         ),
-                        subtitle: Text(
-                          "Rating: ${activePlaceRating ?? 'N/A'} ⭐",
-                        ),
+                        subtitle: Text("ETA: $routeDuration • $routeDistance"),
                         trailing: IconButton(
-                          icon: const Icon(Icons.close, color: Colors.red),
+                          icon: const CircleAvatar(
+                            backgroundColor: Colors.red,
+                            child: Icon(
+                              Icons.close,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                          ),
                           onPressed: () => setState(() {
                             routeDistance = null;
                             polylines.clear();
-                            isFollowingUser = true;
+                            activeDestination = null;
                           }),
                         ),
                       ),
-                      const Divider(),
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text(
-                            "$routeDistance • $routeDuration",
-                            style: const TextStyle(
-                              color: Colors.blue,
-                              fontWeight: FontWeight.bold,
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                foregroundColor: Colors.white,
+                              ),
+                              onPressed: () => _makeCall(activePlacePhone),
+                              icon: const Icon(Icons.phone),
+                              label: const Text("CALL"),
                             ),
                           ),
-                          TextButton.icon(
-                            onPressed: isDrawing ? null : _showNextNearest,
-                            icon: const Icon(Icons.navigate_next),
-                            label: const Text("Next"),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: isDrawing ? null : _showNextNearest,
+                              icon: const Icon(Icons.skip_next),
+                              label: const Text("NEXT"),
+                            ),
                           ),
                         ],
                       ),
@@ -396,118 +460,95 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                 ),
               ),
             ),
-          Positioned(
-            bottom: 30,
-            left: 0,
-            right: 0,
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      FloatingActionButton(
-                        heroTag: "recenter",
-                        mini: true,
-                        backgroundColor: Colors.white,
-                        onPressed: () {
-                          setState(() => isFollowingUser = true);
-                          if (currentPosition != null) {
-                            mapController?.animateCamera(
-                              CameraUpdate.newLatLng(
-                                LatLng(
-                                  currentPosition!.latitude,
-                                  currentPosition!.longitude,
-                                ),
-                              ),
-                            );
-                          }
-                        },
-                        child: const Icon(
-                          Icons.my_location,
-                          color: Colors.blue,
+
+          // --- FLOATING SOS & RECENTER ---
+          if (isAppReady)
+            Positioned(
+              bottom: 120,
+              left: 20,
+              right: 20,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  FloatingActionButton(
+                    mini: true,
+                    backgroundColor: Colors.white,
+                    onPressed: () => setState(() => isFollowingUser = true),
+                    child: const Icon(Icons.my_location, color: Colors.blue),
+                  ),
+                  ScaleTransition(
+                    scale: sosAnimation,
+                    child: FloatingActionButton.extended(
+                      backgroundColor: Colors.red,
+                      onPressed: () {},
+                      label: const Text(
+                        "SOS",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
                         ),
                       ),
-                      ScaleTransition(
-                        scale: sosAnimation,
-                        child: FloatingActionButton.extended(
-                          heroTag: "sos_btn",
-                          backgroundColor: Colors.red,
-                          onPressed: () {},
-                          label: const Text(
-                            "SOS",
-                            style: TextStyle(
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // --- BOTTOM SERVICE SELECTOR ---
+          if (isAppReady)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+                  boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: emergencyServices.map((s) {
+                    return InkWell(
+                      onTap: () {
+                        activeServiceType = s["type"];
+                        if (allNearbyData[activeServiceType!]?.isNotEmpty ??
+                            false) {
+                          servicePointer[activeServiceType!] = 0;
+                          var place = allNearbyData[activeServiceType!]![0];
+                          _drawRoute(
+                            LatLng(
+                              place["geometry"]["location"]["lat"],
+                              place["geometry"]["location"]["lng"],
+                            ),
+                            place,
+                          );
+                        }
+                      },
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircleAvatar(
+                            radius: 28,
+                            backgroundColor: Colors.red.withOpacity(0.1),
+                            child: Icon(s["icon"], color: Colors.red),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            s["title"],
+                            style: const TextStyle(
+                              fontSize: 12,
                               fontWeight: FontWeight.bold,
-                              fontSize: 18,
                             ),
                           ),
-                        ),
+                        ],
                       ),
-                    ],
-                  ),
+                    );
+                  }).toList(),
                 ),
-                const SizedBox(height: 15),
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(30),
-                    ),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black12, blurRadius: 10),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: emergencyServices.map((s) {
-                      return InkWell(
-                        onTap: () {
-                          activeServiceType = s["type"];
-                          if (allNearbyData[activeServiceType!]?.isNotEmpty ??
-                              false) {
-                            servicePointer[activeServiceType!] = 0;
-                            var place = allNearbyData[activeServiceType!]![0];
-                            _drawRoute(
-                              LatLng(
-                                place["geometry"]["location"]["lat"],
-                                place["geometry"]["location"]["lng"],
-                              ),
-                              place,
-                            );
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text("Searching for ${s['title']}..."),
-                              ),
-                            );
-                          }
-                        },
-                        child: Column(
-                          children: [
-                            CircleAvatar(
-                              radius: 28,
-                              backgroundColor: Colors.red.withOpacity(0.1),
-                              child: Icon(s["icon"], color: Colors.red),
-                            ),
-                            const SizedBox(height: 5),
-                            Text(
-                              s["title"],
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
         ],
       ),
     );
