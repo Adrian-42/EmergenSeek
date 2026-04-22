@@ -7,7 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'SettingsPage.dart'; // Ensure this is imported
+import 'SettingsPage.dart';
 
 class EmergencyMapPage extends StatefulWidget {
   const EmergencyMapPage({super.key});
@@ -36,6 +36,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   bool isDrawing = false;
   bool isFollowingUser = true;
   bool isAppReady = false;
+  bool isSendingSOS = false; // Prevents double-tapping
 
   String? routeDistance;
   String? routeDuration;
@@ -83,16 +84,24 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     super.dispose();
   }
 
-  // --- SOS LOGIC ---
+  // --- SOS LOGIC (Email Integration) ---
   Future<void> _triggerSOS() async {
-    if (currentPosition == null) return;
+    if (currentPosition == null || isSendingSOS) return;
 
-    // Show immediate feedback
+    setState(() => isSendingSOS = true);
+
+    // Show immediate UI feedback
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text("🚨 SOS Triggered! Notifying your emergency contacts..."),
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(width: 20),
+            Text("Sending SOS Emails..."),
+          ],
+        ),
         backgroundColor: Colors.red,
-        duration: Duration(seconds: 3),
+        duration: Duration(seconds: 2),
       ),
     );
 
@@ -100,24 +109,48 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
       final prefs = await SharedPreferences.getInstance();
       final userId = prefs.getString('userId');
 
-      // Call your backend SOS route
-      final response = await http.post(
-        Uri.parse("$baseUrl/trigger-sos"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "userId": userId,
-          "lat": currentPosition!.latitude,
-          "lng": currentPosition!.longitude,
-          "locationLink":
-              "https://www.google.com/maps?q=${currentPosition!.latitude},${currentPosition!.longitude}",
-        }),
-      );
+      // Real Google Maps link for the email body
+      final String googleMapsUrl =
+          "https://www.google.com/maps/search/?api=1&query=${currentPosition!.latitude},${currentPosition!.longitude}";
+
+      final response = await http
+          .post(
+            Uri.parse("$baseUrl/trigger-sos"),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({
+              "userId": userId,
+              "lat": currentPosition!.latitude,
+              "lng": currentPosition!.longitude,
+              "locationLink": googleMapsUrl,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        debugPrint("SOS Sent Successfully");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("✅ SOS Alert sent to all contacts!"),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        throw Exception("Failed to send");
       }
     } catch (e) {
-      debugPrint("SOS Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("❌ Failed to send SOS. Check connection."),
+          ),
+        );
+      }
+    } finally {
+      // Cooldown to prevent spamming the email server
+      Future.delayed(const Duration(seconds: 5), () {
+        if (mounted) setState(() => isSendingSOS = false);
+      });
     }
   }
 
@@ -192,7 +225,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     }
   }
 
-  // --- FETCH & SORT NEAREST ---
   Future<void> _fetchPlaces(String type) async {
     if (currentPosition == null) return;
 
@@ -237,7 +269,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     }
   }
 
-  // --- ROUTE DRAWING ---
   Future<void> _drawRoute(LatLng dest, dynamic placeData) async {
     if (currentPosition == null) return;
 
@@ -292,7 +323,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     }
   }
 
-  // --- HELPERS ---
   Future<void> _makeCall(String? phoneNumber) async {
     if (phoneNumber == null) return;
     final Uri url = Uri.parse("tel:$phoneNumber");
@@ -346,7 +376,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
   }
 
   void _zoomToFit(List<LatLng> p) {
-    if (p.isEmpty) return;
+    if (p.isEmpty || mapController == null) return;
     double minLat = p.map((e) => e.latitude).reduce((a, b) => a < b ? a : b);
     double maxLat = p.map((e) => e.latitude).reduce((a, b) => a > b ? a : b);
     double minLng = p.map((e) => e.longitude).reduce((a, b) => a < b ? a : b);
@@ -393,7 +423,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
               elevation: 0,
               actions: [
                 Padding(
-                  padding: const EdgeInsets.only(right: 10),
+                  padding: const EdgeInsets.only(right: 10, top: 10),
                   child: CircleAvatar(
                     backgroundColor: Colors.white,
                     child: IconButton(
@@ -445,8 +475,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                         fontSize: 18,
                       ),
                     ),
-                    SizedBox(height: 8),
-                    Text("Optimizing your GPS location"),
                   ],
                 ),
               ),
@@ -454,7 +482,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
 
           if (routeDistance != null && isAppReady)
             Positioned(
-              top: 100, // Adjusted for AppBar
+              top: 100,
               left: 15,
               right: 15,
               child: Card(
@@ -538,11 +566,11 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
                     scale: sosAnimation,
                     child: FloatingActionButton.extended(
                       heroTag: "sos_btn",
-                      backgroundColor: Colors.red,
-                      onPressed: _triggerSOS, // Hooked up the SOS logic
-                      label: const Text(
-                        "SOS",
-                        style: TextStyle(
+                      backgroundColor: isSendingSOS ? Colors.grey : Colors.red,
+                      onPressed: isSendingSOS ? null : _triggerSOS,
+                      label: Text(
+                        isSendingSOS ? "SENDING..." : "SOS",
+                        style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 18,
                         ),

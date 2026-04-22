@@ -4,6 +4,7 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
 const authRoutes = require("./routes/auth");
+const nodemailer = require("nodemailer");
 
 const app = express();
 
@@ -147,6 +148,51 @@ app.get("/user/:id", async (req, res) => {
   } catch (err) {
     // If ID is malformed, it throws an error
     res.status(400).json({ error: "Invalid User ID format" });
+  }
+});
+
+// --- EMAIL CONFIGURATION ---
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER, // Your Gmail address
+    pass: process.env.EMAIL_PASS, // Your Google App Password
+  },
+});
+
+// --- SOS TRIGGER ROUTE ---
+app.post("/trigger-sos", async (req, res) => {
+  const { userId, locationLink } = req.body;
+
+  try {
+    const user = await User.findById(userId);
+    if (!user || user.emergencyContacts.length === 0) {
+      return res.status(404).json({ error: "No contacts found" });
+    }
+
+    // Extract all emails into a string (e.g., "mom@mail.com, dad@mail.com")
+    const recipientEmails = user.emergencyContacts
+      .map((c) => c.email)
+      .filter((email) => email) // Remove empty emails
+      .join(", ");
+
+    const mailOptions = {
+      from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
+      to: recipientEmails,
+      subject: "🚨 EMERGENCY SOS - [User Name] Needs Help!",
+      html: `
+        <h2>Emergency Alert!</h2>
+        <p>This is an automated alert from <b>EmergenSeek</b>.</p>
+        <p>Your contact is requesting immediate assistance.</p>
+        <p><b>Current Location:</b> <a href="${locationLink}">View on Google Maps</a></p>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    res.json({ message: "SOS Emails sent successfully!" });
+  } catch (err) {
+    console.error("SOS Error:", err);
+    res.status(500).json({ error: "Failed to send SOS alerts" });
   }
 });
 
