@@ -22,26 +22,43 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadUserProfile();
   }
 
-  // Fetch current contacts from Backend
   Future<void> _loadUserProfile() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
 
+    if (userId == null) {
+      debugPrint("No User ID found in storage");
+      setState(() => isLoading = false);
+      return;
+    }
+
     try {
-      final response = await http.get(Uri.parse("$baseUrl/user/$userId"));
+      final response = await http
+          .get(Uri.parse("$baseUrl/user/$userId"))
+          .timeout(const Duration(seconds: 10));
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         setState(() {
+          // Look for 'emergencyContacts' key specifically
           contacts = data['emergencyContacts'] ?? [];
           isLoading = false;
         });
+      } else {
+        debugPrint("Server Error: ${response.statusCode}");
+        setState(() => isLoading = false);
       }
     } catch (e) {
+      debugPrint("Fetch error: $e");
       setState(() => isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Could not sync contacts with server")),
+        );
+      }
     }
   }
 
-  // Add a new contact
   void _addNewContact() {
     TextEditingController nameController = TextEditingController();
     TextEditingController phoneController = TextEditingController();
@@ -59,6 +76,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             TextField(
               controller: phoneController,
+              keyboardType: TextInputType.phone,
               decoration: const InputDecoration(labelText: "Phone Number"),
             ),
           ],
@@ -70,6 +88,9 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           ElevatedButton(
             onPressed: () {
+              if (nameController.text.isEmpty || phoneController.text.isEmpty)
+                return;
+
               setState(() {
                 contacts.add({
                   "name": nameController.text,
@@ -86,27 +107,33 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  // Save current list to MongoDB
   Future<void> _saveContactsToBackend() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
 
-    await http.put(
-      Uri.parse("$baseUrl/user/contacts"),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({"userId": userId, "contacts": contacts}),
-    );
+    try {
+      final response = await http.put(
+        Uri.parse("$baseUrl/user/contacts"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"userId": userId, "contacts": contacts}),
+      );
+
+      if (response.statusCode != 200) {
+        debugPrint("Failed to save: ${response.body}");
+      }
+    } catch (e) {
+      debugPrint("Save error: $e");
+    }
   }
 
-  // Logout Logic
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.clear(); // Deletes token and userId
+    await prefs.clear();
     if (!mounted) return;
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (context) => const LoginPage()),
-      (route) => false, // Clears navigation stack
+      (route) => false,
     );
   }
 
@@ -116,9 +143,10 @@ class _SettingsPageState extends State<SettingsPage> {
       appBar: AppBar(
         title: const Text("Settings"),
         backgroundColor: Colors.red,
+        elevation: 0,
       ),
       body: isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: Colors.red))
           : Padding(
               padding: const EdgeInsets.all(16.0),
               child: Column(
@@ -132,45 +160,68 @@ class _SettingsPageState extends State<SettingsPage> {
                     "These contacts will be notified when you trigger SOS.",
                     style: TextStyle(color: Colors.grey),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 20),
                   Expanded(
-                    child: ListView.builder(
-                      itemCount: contacts.length,
-                      itemBuilder: (context, index) {
-                        return Card(
-                          child: ListTile(
-                            leading: const Icon(
-                              Icons.person,
-                              color: Colors.red,
-                            ),
-                            title: Text(contacts[index]['name']),
-                            subtitle: Text(contacts[index]['phone']),
-                            trailing: IconButton(
-                              icon: const Icon(
-                                Icons.delete,
-                                color: Colors.grey,
-                              ),
-                              onPressed: () {
-                                setState(() => contacts.removeAt(index));
-                                _saveContactsToBackend();
-                              },
-                            ),
+                    child: contacts.isEmpty
+                        ? const Center(child: Text("No contacts added yet."))
+                        : ListView.builder(
+                            itemCount: contacts.length,
+                            itemBuilder: (context, index) {
+                              return Card(
+                                margin: const EdgeInsets.only(bottom: 10),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: ListTile(
+                                  leading: const CircleAvatar(
+                                    backgroundColor: Colors.red,
+                                    child: Icon(
+                                      Icons.person,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  title: Text(
+                                    contacts[index]['name'] ?? "Unknown",
+                                  ),
+                                  subtitle: Text(
+                                    contacts[index]['phone'] ?? "No Number",
+                                  ),
+                                  trailing: IconButton(
+                                    icon: const Icon(
+                                      Icons.delete_outline,
+                                      color: Colors.grey,
+                                    ),
+                                    onPressed: () {
+                                      setState(() => contacts.removeAt(index));
+                                      _saveContactsToBackend();
+                                    },
+                                  ),
+                                ),
+                              );
+                            },
                           ),
-                        );
-                      },
-                    ),
                   ),
+                  const SizedBox(height: 10),
                   ElevatedButton.icon(
                     onPressed: _addNewContact,
                     icon: const Icon(Icons.add),
-                    label: const Text("Add Contact"),
+                    label: const Text("ADD NEW CONTACT"),
                     style: ElevatedButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 50),
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 55),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                   const Divider(height: 40),
                   ListTile(
                     onTap: _logout,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    tileColor: Colors.red.withOpacity(0.1),
                     leading: const Icon(Icons.logout, color: Colors.red),
                     title: const Text(
                       "Logout",

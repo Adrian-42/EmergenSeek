@@ -142,9 +142,11 @@ app.put("/user/contacts", async (req, res) => {
 app.get("/user/:id", async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select("-password");
+    if (!user) return res.status(404).json({ error: "User not found" });
     res.json(user);
   } catch (err) {
-    res.status(404).json({ error: "User not found" });
+    // If ID is malformed, it throws an error
+    res.status(400).json({ error: "Invalid User ID format" });
   }
 });
 
