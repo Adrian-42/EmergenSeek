@@ -129,7 +129,7 @@ app.put("/user/contacts", async (req, res) => {
     const user = await User.findByIdAndUpdate(
       userId,
       { emergencyContacts: contacts },
-      { new: true },
+      { returnDocument: "after" }, // Fixed for Mongoose 8+
     );
     res.json({
       message: "Contacts updated successfully",
@@ -156,8 +156,8 @@ app.get("/user/:id", async (req, res) => {
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: process.env.EMAIL_USER, // Your Gmail address
-    pass: process.env.EMAIL_PASS, // Your Google App Password
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
   },
 });
 
@@ -180,13 +180,13 @@ app.post("/trigger-sos", async (req, res) => {
     const mailOptions = {
       from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
       to: recipientEmails,
-      subject: "🚨 EMERGENCY SOS - [User Name] Needs Help!",
+      subject: `🚨 EMERGENCY SOS - ${user.name} Needs Help!`,
       html: `
-        <h2>Emergency Alert!</h2>
-        <p>This is an automated alert from <b>EmergenSeek</b>.</p>
-        <p>Your contact is requesting immediate assistance.</p>
-        <p><b>Current Location:</b> <a href="${locationLink}">View on Google Maps</a></p>
-      `,
+    <h2>Emergency Alert!</h2>
+    <p>This is an automated alert from <b>EmergenSeek</b>.</p>
+    <p><b>${user.name}</b> is requesting immediate assistance.</p>
+    <p><b>Current Location:</b> <a href="${locationLink}">View on Google Maps</a></p>
+  `,
     };
 
     await transporter.sendMail(mailOptions);

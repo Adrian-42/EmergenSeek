@@ -1,3 +1,5 @@
+//routes/auth.js
+
 const express = require("express");
 const router = express.Router(); // Use Router instead of app
 const bcrypt = require("bcryptjs");
