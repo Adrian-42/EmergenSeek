@@ -8,6 +8,7 @@ require("dotenv").config();
 const authRoutes = require("./routes/auth");
 const nodemailer = require("nodemailer");
 const User = require("./models/User");
+const userRoutes = require("./routes/userRoutes");
 
 const app = express();
 const server = http.createServer(app); // Correctly wrap the app
@@ -39,6 +40,8 @@ const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 
 app.use("/", authRoutes);
+
+app.use("/user", userRoutes);
 
 // --- SOCKET.IO REAL-TIME LOGIC ---
 io.on("connection", (socket) => {
