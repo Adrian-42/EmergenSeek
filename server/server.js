@@ -1,4 +1,6 @@
 const express = require("express");
+const http = require("http"); // Added for Socket.io
+const { Server } = require("socket.io"); // Added for Socket.io
 const axios = require("axios");
 const cors = require("cors");
 const mongoose = require("mongoose");
@@ -8,9 +10,14 @@ const nodemailer = require("nodemailer");
 const User = require("./models/User");
 
 const app = express();
+const server = http.createServer(app); // Create HTTP server
+const io = new Server(server, {
+  cors: {
+    origin: "*", // Flutter/Web compatibility
+    methods: ["GET", "POST"],
+  },
+});
 
-// --- CORS CONFIGURATION ---
-// Origins are set to "*" for development flexibility with Flutter/Web
 app.use(
   cors({
     origin: "*",
@@ -30,9 +37,34 @@ app.use(express.json());
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 
-// --- AUTH ROUTES ---
 app.use("/", authRoutes);
 
+// --- SOCKET.IO REAL-TIME LOGIC ---
+io.on("connection", (socket) => {
+  console.log(`🔌 User Connected: ${socket.id}`);
+
+  // Join a private room based on Emergency ID
+  socket.on("join_emergency", (emergencyId) => {
+    socket.join(emergencyId);
+    console.log(`📡 Socket ${socket.id} joined room: ${emergencyId}`);
+  });
+
+  // Victim updates their live location
+  socket.on("update_location", (data) => {
+    // data: { emergencyId, lat, lng, heading }
+    io.to(data.emergencyId).emit("location_received", data);
+  });
+
+  // Two-way Chat
+  socket.on("send_message", (data) => {
+    // data: { emergencyId, senderId, text, timestamp }
+    io.to(data.emergencyId).emit("message_received", data);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("❌ User Disconnected");
+  });
+});
 // --- MONGODB CONNECTION ---
 if (MONGO_URI) {
   mongoose

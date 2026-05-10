@@ -1,12 +1,34 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 
-class SplashScreen extends StatelessWidget {
+class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Optional: Auto-navigate after 3 seconds if user doesn't click
+    // Timer(const Duration(seconds: 3), () {
+    //   if (mounted) _navigateToHome();
+    // });
+  }
+
+  void _navigateToHome() {
+    // This routes to the Wrapper which decides if user sees Login, Map, or Dashboard
+    Navigator.pushReplacementNamed(context, '/home_wrapper');
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
+        width: double.infinity,
+        height: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
@@ -18,12 +40,21 @@ class SplashScreen extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              // Logo Container
               Container(
                 width: 200,
                 height: 200,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.9),
                   border: Border.all(color: Colors.red, width: 6),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 20,
+                      spreadRadius: 5,
+                    ),
+                  ],
                 ),
                 child: const Icon(
                   Icons.notifications_active,
@@ -32,23 +63,35 @@ class SplashScreen extends StatelessWidget {
                 ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 30),
 
-              const Text(
+              Text(
                 "EMERGENSEEK",
                 style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 32,
+                  letterSpacing: 2.0,
+                  fontWeight: FontWeight.w900,
                   color: Colors.red,
                 ),
               ),
 
-              const SizedBox(height: 120),
+              const Text(
+                "Faster Response, Safer Community",
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.white70,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
 
+              const SizedBox(height: 100),
+
+              // Action Button
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.white,
-                  foregroundColor: Colors.black,
+                  foregroundColor: Colors.red.shade900,
+                  elevation: 5,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 60,
                     vertical: 18,
@@ -57,12 +100,10 @@ class SplashScreen extends StatelessWidget {
                     borderRadius: BorderRadius.circular(40),
                   ),
                 ),
-                onPressed: () {
-                  Navigator.pushNamed(context, "/login");
-                },
+                onPressed: _navigateToHome,
                 child: const Text(
                   "GET STARTED",
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),
             ],

@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'login_page.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:geolocator/geolocator.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -12,7 +13,6 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  // Replace with your actual deployed backend URL if different
   final String baseUrl = "https://emergenseek.onrender.com";
   List<dynamic> contacts = [];
   bool isLoading = true;
@@ -23,7 +23,7 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadUserProfile();
   }
 
-  // Fetches the user data from MongoDB via the backend
+  /// Fetches the user data from MongoDB via the backend
   Future<void> _loadUserProfile() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
@@ -40,21 +40,65 @@ class _SettingsPageState extends State<SettingsPage> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        setState(() {
-          // Ensure we map the emergencyContacts from the DB to our local list
-          contacts = data['emergencyContacts'] ?? [];
-          isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            contacts = data['emergencyContacts'] ?? [];
+            isLoading = false;
+          });
+        }
       } else {
         setState(() => isLoading = false);
       }
     } catch (e) {
       debugPrint("Fetch error: $e");
-      setState(() => isLoading = false);
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
-  // Dialog to capture Name, Phone, and Email
+  /// The logic used to trigger the email alert
+  Future<void> sendSosEmail(Position? currentPos) async {
+    if (contacts.isEmpty) {
+      _showSnackBar("No emergency contacts found! Add one first.");
+      return;
+    }
+
+    final List<String> emailList = contacts
+        .map((c) => c['email'].toString())
+        .where((email) => email.isNotEmpty)
+        .toList();
+
+    if (emailList.isEmpty) {
+      _showSnackBar("None of your contacts have email addresses.");
+      return;
+    }
+
+    final String recipientString = emailList.join(',');
+    final String subject = Uri.encodeComponent("EMERGENCY: SOS ALERT");
+
+    String locationLink = "Location not available";
+    if (currentPos != null) {
+      // FIXED: Corrected the string interpolation and URL format
+      locationLink =
+          "https://www.google.com/maps/search/?api=1&query=${currentPos.latitude},${currentPos.longitude}";
+    }
+
+    final String body = Uri.encodeComponent(
+      "This is an automated SOS alert from EmergenSeek. I need immediate assistance.\n\n"
+      "My last known location: $locationLink",
+    );
+
+    final Uri emailUri = Uri.parse(
+      "mailto:$recipientString?subject=$subject&body=$body",
+    );
+
+    if (await canLaunchUrl(emailUri)) {
+      await launchUrl(emailUri);
+    } else {
+      _showSnackBar("Could not open email app.");
+    }
+  }
+
+  /// Dialog to capture Name, Phone, and Email
   void _addNewContact() {
     TextEditingController nameController = TextEditingController();
     TextEditingController phoneController = TextEditingController();
@@ -63,6 +107,7 @@ class _SettingsPageState extends State<SettingsPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text("Add SOS Contact"),
         content: SingleChildScrollView(
           child: Column(
@@ -70,6 +115,7 @@ class _SettingsPageState extends State<SettingsPage> {
             children: [
               TextField(
                 controller: nameController,
+                textCapitalization: TextCapitalization.words,
                 decoration: const InputDecoration(
                   labelText: "Name",
                   prefixIcon: Icon(Icons.person),
@@ -101,16 +147,16 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           ElevatedButton(
             onPressed: () {
-              if (nameController.text.isEmpty || emailController.text.isEmpty) {
-                // Basic validation
+              if (nameController.text.trim().isEmpty ||
+                  emailController.text.trim().isEmpty) {
+                _showSnackBar("Name and Email are required.");
                 return;
               }
-
               setState(() {
                 contacts.add({
-                  "name": nameController.text,
-                  "phone": phoneController.text,
-                  "email": emailController.text,
+                  "name": nameController.text.trim(),
+                  "phone": phoneController.text.trim(),
+                  "email": emailController.text.trim(),
                 });
               });
               _saveContactsToBackend();
@@ -124,7 +170,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  // Sends the updated contacts list to the /user/contacts PUT route
+  /// Updates the contacts list in the MongoDB database
   Future<void> _saveContactsToBackend() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
@@ -137,30 +183,52 @@ class _SettingsPageState extends State<SettingsPage> {
       );
 
       if (response.statusCode == 200) {
-        debugPrint("Contacts synced to cloud successfully.");
+        debugPrint("Contacts synced successfully.");
       }
     } catch (e) {
       debugPrint("Save error: $e");
     }
   }
 
+  /// Logout logic linked to HomeWrapper system
   Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
-    if (!mounted) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (context) => const LoginPage()),
-      (route) => false,
+    bool? confirm = await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Logout"),
+        content: const Text("Are you sure you want to log out?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("No"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text("Yes", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
     );
+
+    if (confirm == true) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      if (mounted) {
+        Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
+      }
+    }
+  }
+
+  void _showSnackBar(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Fixed: lowerCamelCase 'appBar'
       appBar: AppBar(
         title: const Text("Settings"),
+        elevation: 0,
         backgroundColor: Colors.red,
         foregroundColor: Colors.white,
       ),
@@ -173,22 +241,41 @@ class _SettingsPageState extends State<SettingsPage> {
                 children: [
                   const Text(
                     "Emergency Contacts",
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                   ),
                   const Text(
-                    "These contacts will be notified during an SOS alert.",
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    "These people will receive your location during an SOS.",
+                    style: TextStyle(color: Colors.grey),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 20),
                   Expanded(
                     child: contacts.isEmpty
-                        ? const Center(child: Text("No contacts added yet."))
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.people_outline,
+                                  size: 60,
+                                  color: Colors.grey[300],
+                                ),
+                                const Text(
+                                  "No contacts yet",
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          )
                         : ListView.builder(
                             itemCount: contacts.length,
                             itemBuilder: (context, index) {
                               final contact = contacts[index];
                               return Card(
-                                margin: const EdgeInsets.symmetric(vertical: 5),
+                                elevation: 2,
+                                margin: const EdgeInsets.symmetric(vertical: 8),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
                                 child: ListTile(
                                   leading: const CircleAvatar(
                                     backgroundColor: Colors.red,
@@ -198,7 +285,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                     ),
                                   ),
                                   title: Text(
-                                    contact['name'] ?? "No Name",
+                                    contact['name'] ?? "Unknown",
                                     style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                     ),
@@ -209,8 +296,8 @@ class _SettingsPageState extends State<SettingsPage> {
                                   isThreeLine: true,
                                   trailing: IconButton(
                                     icon: const Icon(
-                                      Icons.delete,
-                                      color: Colors.grey,
+                                      Icons.delete_outline,
+                                      color: Colors.redAccent,
                                     ),
                                     onPressed: () {
                                       setState(() => contacts.removeAt(index));
@@ -226,22 +313,29 @@ class _SettingsPageState extends State<SettingsPage> {
                   ElevatedButton.icon(
                     onPressed: _addNewContact,
                     icon: const Icon(Icons.add),
-                    label: const Text("ADD CONTACT"),
+                    label: const Text(
+                      "ADD NEW CONTACT",
+                      style: TextStyle(
+                        letterSpacing: 1.2,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.red,
                       foregroundColor: Colors.white,
-                      minimumSize: const Size(double.infinity, 50),
+                      minimumSize: const Size(double.infinity, 55),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(15),
                       ),
                     ),
                   ),
-                  const Divider(height: 40),
+                  const SizedBox(height: 10),
+                  const Divider(),
                   ListTile(
                     onTap: _logout,
                     leading: const Icon(Icons.logout, color: Colors.red),
                     title: const Text(
-                      "Logout",
+                      "Logout Account",
                       style: TextStyle(
                         color: Colors.red,
                         fontWeight: FontWeight.bold,

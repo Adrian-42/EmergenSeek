@@ -16,6 +16,8 @@ class _SignupPageState extends State<SignupPage> {
   final TextEditingController emailController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
 
+  // Role Selection State
+  String selectedRole = "victim";
   bool isLoading = false;
 
   // Use your Render URL or local IP (10.0.2.2 for Android Emulator)
@@ -42,6 +44,7 @@ class _SignupPageState extends State<SignupPage> {
           "name": nameController.text.trim(),
           "email": emailController.text.trim(),
           "password": passwordController.text,
+          "role": selectedRole, // Sending the role to the backend
         }),
       );
 
@@ -50,14 +53,13 @@ class _SignupPageState extends State<SignupPage> {
       if (response.statusCode == 201) {
         if (!mounted) return;
 
-        // Success! Show message and go back to Login
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("Account created! Please login."),
             backgroundColor: Colors.green,
           ),
         );
-        Navigator.pop(context); // Go back to Login Page
+        Navigator.pop(context);
       } else {
         _showError(data['error'] ?? "Registration failed");
       }
@@ -86,18 +88,18 @@ class _SignupPageState extends State<SignupPage> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(height: 20),
+                const SizedBox(height: 10),
                 const Icon(
                   Icons.person_add_alt_1_rounded,
-                  size: 80,
+                  size: 70,
                   color: Colors.red,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 15),
                 const Text(
                   "Create Account",
                   style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 40),
+                const SizedBox(height: 30),
 
                 /// NAME FIELD
                 TextFormField(
@@ -140,6 +142,34 @@ class _SignupPageState extends State<SignupPage> {
                     prefixIcon: Icon(Icons.lock),
                     border: OutlineInputBorder(),
                   ),
+                ),
+                const SizedBox(height: 20),
+
+                /// ROLE DROPDOWN
+                DropdownButtonFormField<String>(
+                  value: selectedRole,
+                  decoration: const InputDecoration(
+                    labelText: "User Role",
+                    prefixIcon: Icon(Icons.badge),
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: "victim",
+                      child: Text("Citizen / Victim"),
+                    ),
+                    DropdownMenuItem(
+                      value: "responder",
+                      child: Text("First Responder"),
+                    ),
+                  ],
+                  onChanged: (String? newValue) {
+                    if (newValue != null) {
+                      setState(() {
+                        selectedRole = newValue;
+                      });
+                    }
+                  },
                 ),
                 const SizedBox(height: 30),
 
