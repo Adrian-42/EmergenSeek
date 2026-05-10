@@ -1,9 +1,7 @@
-import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:geolocator/geolocator.dart';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -14,213 +12,162 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final String baseUrl = "https://emergenseek.onrender.com";
-  List<dynamic> contacts = [];
-  bool isLoading = true;
+
+  // Form Keys
+  final _contactFormKey = GlobalKey<FormState>();
+  final _passwordFormKey = GlobalKey<FormState>();
+
+  // Controllers
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _oldPasswordController = TextEditingController();
+  final TextEditingController _newPasswordController = TextEditingController();
+
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
-    _loadUserProfile();
+    _loadInitialData();
   }
 
-  /// Fetches the user data from MongoDB via the backend
-  Future<void> _loadUserProfile() async {
+  // --- PERSISTENCE: LOAD DATA ---
+  Future<void> _loadInitialData() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // Load local data first for immediate display
+    setState(() {
+      _emailController.text = prefs.getString('emergencyEmail') ?? '';
+      _phoneController.text = prefs.getString('emergencyPhone') ?? '';
+    });
+
+    // Fetch latest data from server to keep it dynamic
+    final userId = prefs.getString('userId');
+    if (userId != null) {
+      try {
+        final response = await http.get(Uri.parse("$baseUrl/user/$userId"));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final List<dynamic> contacts = data['emergencyContacts'] ?? [];
+          if (contacts.isNotEmpty) {
+            setState(() {
+              _emailController.text =
+                  contacts[0]['email'] ?? _emailController.text;
+              _phoneController.text =
+                  contacts[0]['phone'] ?? _phoneController.text;
+            });
+            // Update local cache to match server
+            await prefs.setString('emergencyEmail', _emailController.text);
+            await prefs.setString('emergencyPhone', _phoneController.text);
+          }
+        }
+      } catch (e) {
+        debugPrint("Sync error: $e");
+      }
+    }
+  }
+
+  // --- LOGIC: UPDATE EMERGENCY CONTACTS ---
+  Future<void> _updateContacts() async {
+    if (!_contactFormKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
 
-    if (userId == null) {
-      setState(() => isLoading = false);
-      return;
-    }
-
     try {
-      final response = await http
-          .get(Uri.parse("$baseUrl/user/$userId"))
-          .timeout(const Duration(seconds: 10));
+      // Update locally
+      await prefs.setString('emergencyEmail', _emailController.text);
+      await prefs.setString('emergencyPhone', _phoneController.text);
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (mounted) {
-          setState(() {
-            contacts = data['emergencyContacts'] ?? [];
-            isLoading = false;
-          });
-        }
-      } else {
-        setState(() => isLoading = false);
-      }
-    } catch (e) {
-      debugPrint("Fetch error: $e");
-      if (mounted) setState(() => isLoading = false);
-    }
-  }
-
-  /// The logic used to trigger the email alert
-  Future<void> sendSosEmail(Position? currentPos) async {
-    if (contacts.isEmpty) {
-      _showSnackBar("No emergency contacts found! Add one first.");
-      return;
-    }
-
-    final List<String> emailList = contacts
-        .map((c) => c['email'].toString())
-        .where((email) => email.isNotEmpty)
-        .toList();
-
-    if (emailList.isEmpty) {
-      _showSnackBar("None of your contacts have email addresses.");
-      return;
-    }
-
-    final String recipientString = emailList.join(',');
-    final String subject = Uri.encodeComponent("EMERGENCY: SOS ALERT");
-
-    String locationLink = "Location not available";
-    if (currentPos != null) {
-      // FIXED: Corrected the string interpolation and URL format
-      locationLink =
-          "https://www.google.com/maps/search/?api=1&query=${currentPos.latitude},${currentPos.longitude}";
-    }
-
-    final String body = Uri.encodeComponent(
-      "This is an automated SOS alert from EmergenSeek. I need immediate assistance.\n\n"
-      "My last known location: $locationLink",
-    );
-
-    final Uri emailUri = Uri.parse(
-      "mailto:$recipientString?subject=$subject&body=$body",
-    );
-
-    if (await canLaunchUrl(emailUri)) {
-      await launchUrl(emailUri);
-    } else {
-      _showSnackBar("Could not open email app.");
-    }
-  }
-
-  /// Dialog to capture Name, Phone, and Email
-  void _addNewContact() {
-    TextEditingController nameController = TextEditingController();
-    TextEditingController phoneController = TextEditingController();
-    TextEditingController emailController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("Add SOS Contact"),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(
-                  labelText: "Name",
-                  prefixIcon: Icon(Icons.person),
-                ),
-              ),
-              TextField(
-                controller: phoneController,
-                keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(
-                  labelText: "Phone Number",
-                  prefixIcon: Icon(Icons.phone),
-                ),
-              ),
-              TextField(
-                controller: emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: "Email Address",
-                  prefixIcon: Icon(Icons.email),
-                ),
-              ),
+      // Update server
+      if (userId != null) {
+        await http.put(
+          Uri.parse("$baseUrl/user/update-contacts"),
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({
+            "userId": userId,
+            "emergencyContacts": [
+              {"email": _emailController.text, "phone": _phoneController.text},
             ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (nameController.text.trim().isEmpty ||
-                  emailController.text.trim().isEmpty) {
-                _showSnackBar("Name and Email are required.");
-                return;
-              }
-              setState(() {
-                contacts.add({
-                  "name": nameController.text.trim(),
-                  "phone": phoneController.text.trim(),
-                  "email": emailController.text.trim(),
-                });
-              });
-              _saveContactsToBackend();
-              Navigator.pop(context);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text("Save", style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
+          }),
+        );
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Emergency contacts updated!")),
+      );
+    } catch (e) {
+      debugPrint("Update error: $e");
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
-  /// Updates the contacts list in the MongoDB database
-  Future<void> _saveContactsToBackend() async {
+  // --- LOGIC: CHANGE PASSWORD ---
+  Future<void> _changePassword() async {
+    if (!_passwordFormKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
 
     try {
       final response = await http.put(
-        Uri.parse("$baseUrl/user/contacts"),
+        Uri.parse("$baseUrl/user/change-password"),
         headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"userId": userId, "contacts": contacts}),
+        body: jsonEncode({
+          "userId": userId,
+          "oldPassword": _oldPasswordController.text,
+          "newPassword": _newPasswordController.text,
+        }),
       );
 
       if (response.statusCode == 200) {
-        debugPrint("Contacts synced successfully.");
+        _oldPasswordController.clear();
+        _newPasswordController.clear();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Password changed successfully!")),
+        );
+      } else {
+        final error = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error['message'] ?? "Failed to change password"),
+          ),
+        );
       }
     } catch (e) {
-      debugPrint("Save error: $e");
+      debugPrint("Password error: $e");
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
-  /// Logout logic linked to HomeWrapper system
+  // --- LOGIC: LOGOUT ---
   Future<void> _logout() async {
-    bool? confirm = await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Logout"),
-        content: const Text("Are you sure you want to log out?"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text("No"),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text("Yes", style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    // Clearing 'role' and 'userId' will trigger HomeWrapper to show LoginPage
+    await prefs.remove('role');
+    await prefs.remove('userId');
 
-    if (confirm == true) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-      if (mounted) {
-        Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
-      }
+    if (mounted) {
+      // Pop all routes and go back to the wrapper/login
+      Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
     }
   }
 
-  void _showSnackBar(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  // --- VALIDATORS ---
+  String? _validateEmail(String? value) {
+    if (value == null || value.isEmpty) return "Required";
+    final regex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    return regex.hasMatch(value) ? null : "Enter a valid email";
+  }
+
+  String? _validatePhone(String? value) {
+    if (value == null || value.isEmpty) return "Required";
+    // Philippine Regex: Supports 09xxxxxxxxx or +639xxxxxxxxx
+    final regex = RegExp(r'^(09|\+639)\d{9}$');
+    return regex.hasMatch(value) ? null : "Invalid PH format (09123456789)";
   }
 
   @override
@@ -228,117 +175,131 @@ class _SettingsPageState extends State<SettingsPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Settings"),
-        elevation: 0,
-        backgroundColor: Colors.red,
-        foregroundColor: Colors.white,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 1,
       ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator(color: Colors.red))
-          : Padding(
-              padding: const EdgeInsets.all(16.0),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(24.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // --- EMERGENCY CONTACT SECTION ---
                   const Text(
                     "Emergency Contacts",
-                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
-                  const Text(
-                    "These people will receive your location during an SOS.",
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                  const SizedBox(height: 20),
-                  Expanded(
-                    child: contacts.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.people_outline,
-                                  size: 60,
-                                  color: Colors.grey[300],
-                                ),
-                                const Text(
-                                  "No contacts yet",
-                                  style: TextStyle(color: Colors.grey),
-                                ),
-                              ],
-                            ),
-                          )
-                        : ListView.builder(
-                            itemCount: contacts.length,
-                            itemBuilder: (context, index) {
-                              final contact = contacts[index];
-                              return Card(
-                                elevation: 2,
-                                margin: const EdgeInsets.symmetric(vertical: 8),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: ListTile(
-                                  leading: const CircleAvatar(
-                                    backgroundColor: Colors.red,
-                                    child: Icon(
-                                      Icons.person,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  title: Text(
-                                    contact['name'] ?? "Unknown",
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  subtitle: Text(
-                                    "📞 ${contact['phone'] ?? 'N/A'}\n✉️ ${contact['email'] ?? 'N/A'}",
-                                  ),
-                                  isThreeLine: true,
-                                  trailing: IconButton(
-                                    icon: const Icon(
-                                      Icons.delete_outline,
-                                      color: Colors.redAccent,
-                                    ),
-                                    onPressed: () {
-                                      setState(() => contacts.removeAt(index));
-                                      _saveContactsToBackend();
-                                    },
-                                  ),
-                                ),
-                              );
-                            },
+                  const SizedBox(height: 16),
+                  Form(
+                    key: _contactFormKey,
+                    child: Column(
+                      children: [
+                        TextFormField(
+                          controller: _emailController,
+                          decoration: const InputDecoration(
+                            labelText: "Contact Email",
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.email_outlined),
                           ),
-                  ),
-                  const SizedBox(height: 10),
-                  ElevatedButton.icon(
-                    onPressed: _addNewContact,
-                    icon: const Icon(Icons.add),
-                    label: const Text(
-                      "ADD NEW CONTACT",
-                      style: TextStyle(
-                        letterSpacing: 1.2,
-                        fontWeight: FontWeight.bold,
-                      ),
+                          validator: _validateEmail,
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _phoneController,
+                          decoration: const InputDecoration(
+                            labelText: "Contact Phone (PH)",
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.phone_android),
+                            hintText: "09xxxxxxxxx",
+                          ),
+                          keyboardType: TextInputType.phone,
+                          validator: _validatePhone,
+                        ),
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: _updateContacts,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text("Save Contacts"),
+                          ),
+                        ),
+                      ],
                     ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(double.infinity, 55),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15),
-                      ),
+                  ),
+
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Divider(),
+                  ),
+
+                  // --- PASSWORD SECTION ---
+                  const Text(
+                    "Security",
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 16),
+                  Form(
+                    key: _passwordFormKey,
+                    child: Column(
+                      children: [
+                        TextFormField(
+                          controller: _oldPasswordController,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: "Current Password",
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.lock_outline),
+                          ),
+                          validator: (v) => v!.isEmpty ? "Required" : null,
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _newPasswordController,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: "New Password",
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.lock_reset),
+                          ),
+                          validator: (v) =>
+                              v!.length < 6 ? "Minimum 6 characters" : null,
+                        ),
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: _changePassword,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.black87,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text("Update Password"),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  const Divider(),
-                  ListTile(
-                    onTap: _logout,
-                    leading: const Icon(Icons.logout, color: Colors.red),
-                    title: const Text(
-                      "Logout Account",
-                      style: TextStyle(
-                        color: Colors.red,
-                        fontWeight: FontWeight.bold,
+
+                  const SizedBox(height: 40),
+
+                  // --- LOGOUT SECTION ---
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _logout,
+                      icon: const Icon(Icons.logout, color: Colors.red),
+                      label: const Text(
+                        "Logout",
+                        style: TextStyle(color: Colors.red),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.red),
                       ),
                     ),
                   ),
