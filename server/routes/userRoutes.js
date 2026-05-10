@@ -3,22 +3,9 @@ const router = express.Router();
 const User = require("../models/User");
 const bcrypt = require("bcrypt");
 const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587, // Switch to 587
-  secure: false, // Must be false for 587
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  connectionTimeout: 20000, // Increase to 20 seconds
-  tls: {
-    // This forces the connection to stay on IPv4
-    rejectUnauthorized: false,
-    minVersion: "TLSv1.2",
-  },
-});
 // 1. Get User Profile
 router.get("/:id", async (req, res) => {
   try {
@@ -105,7 +92,6 @@ router.put("/change-password", async (req, res) => {
 });
 
 // 5. Trigger SOS Email
-// 5. Trigger SOS Email (With Enhanced Debugging)
 router.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
   console.log("-----------------------------------------");
@@ -113,9 +99,8 @@ router.post("/trigger-sos", async (req, res) => {
 
   try {
     const user = await User.findById(userId);
-
     if (!user) {
-      console.error("❌ ERROR: User not found in database.");
+      console.error("❌ ERROR: User not found.");
       return res.status(404).json({ error: "User not found." });
     }
 
@@ -123,9 +108,7 @@ router.post("/trigger-sos", async (req, res) => {
 
     if (!user.emergencyContacts || user.emergencyContacts.length === 0) {
       console.warn("⚠️ SOS STOPPED: No contacts found.");
-      return res
-        .status(404)
-        .json({ error: "No emergency contacts configured." });
+      return res.status(404).json({ error: "No contacts configured." });
     }
 
     const recipientEmails = user.emergencyContacts
@@ -133,36 +116,47 @@ router.post("/trigger-sos", async (req, res) => {
       .filter((e) => e != null && e !== "");
 
     if (recipientEmails.length === 0) {
-      return res.status(400).json({ error: "No valid emails in contacts." });
+      return res.status(400).json({ error: "No valid emails." });
     }
 
-    const emailList = recipientEmails.join(", ");
-    console.log(`📧 Sending to: ${emailList}`);
+    console.log(`📧 Sending via Resend to: ${recipientEmails}`);
 
-    // Verify SMTP before sending to avoid hanging
-    await transporter.verify();
-    console.log("✅ SMTP Verified.");
-
-    const info = await transporter.sendMail({
-      from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
-      to: emailList,
+    // Sending via Resend API (HTTP instead of SMTP)
+    const { data, error } = await resend.emails.send({
+      from: "EmergenSeek <onboarding@resend.dev>", // Change to your verified domain later
+      to: recipientEmails,
       subject: `🚨 SOS Alert: ${user.name} needs help!`,
       html: `
-        <div style="font-family: sans-serif; padding: 20px; border: 2px solid red;">
-          <h2>🚨 EMERGENCY SOS ALERT</h2>
+        <div style="font-family: sans-serif; padding: 20px; border: 2px solid red; border-radius: 10px;">
+          <h2 style="color: red;">🚨 EMERGENCY SOS ALERT</h2>
           <p><b>${user.name}</b> has triggered an SOS alert and needs assistance.</p>
           <p><b>Last Known Location:</b></p>
-          <a href="${locationLink}" style="background: red; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">View on Google Maps</a>
+          <div style="margin-top: 20px;">
+            <a href="${locationLink}" style="background: red; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+              View on Google Maps
+            </a>
+          </div>
+          <p style="margin-top: 20px; font-size: 12px; color: #666;">
+            This alert was sent via EmergenSeek Mobile App.
+          </p>
         </div>
       `,
     });
 
-    console.log("✅ SOS Emails sent! ID:", info.messageId);
+    if (error) {
+      console.error("🔥 Resend API Error:", error);
+      return res.status(500).json({ error: "Resend failed", details: error });
+    }
+
+    console.log("✅ SOS Emails successfully sent via Resend!");
+    console.log("📬 Resend ID:", data.id);
     console.log("-----------------------------------------");
-    res.json({ message: "SOS Emails sent!" });
+    res.json({ message: "SOS Emails sent!", id: data.id });
   } catch (err) {
     console.error("🔥 SOS FATAL ERROR:", err.message);
-    res.status(500).json({ error: "Email failure", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Internal server error", details: err.message });
   }
 });
 // ADD THIS: Update Personal Phone Number
