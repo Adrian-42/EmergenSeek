@@ -33,6 +33,11 @@ const userSchema = new mongoose.Schema(
       default: "victim",
     },
 
+    phoneNumber: {
+      type: String,
+      default: "", // Using default empty string to avoid null issues
+    },
+
     // 2. Emergency Status (Useful for responders to find active victims)
     isEmergencyActive: {
       type: Boolean,

@@ -65,35 +65,33 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // --- LOGIC: UPDATE PERSONAL PHONE ---
   Future<void> _updatePersonalPhone() async {
-    if (!_personalFormKey.currentState!.validate()) return;
-    setState(() => _isLoading = true);
-
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
 
-    try {
-      final response = await http.put(
-        Uri.parse("$baseUrl/user/update-phone"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "userId": userId,
-          "phoneNumber": _personalPhoneController.text,
-        }),
-      );
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            response.statusCode == 200 ? "Phone updated!" : "Update failed",
-          ),
-        ),
-      );
-    } finally {
-      setState(() => _isLoading = false);
+    final response = await http.put(
+      Uri.parse("$baseUrl/user/update-phone"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "userId": userId,
+        "phoneNumber": _personalPhoneController.text,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      // Optional: Save to local storage as well for offline speed
+      await prefs.setString('userPhone', _personalPhoneController.text);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Phone saved to Database!")));
     }
   }
 
   // --- LOGIC: ADD/UPDATE CONTACTS ---
+  // Update the contact dialog to include a Name field
   void _showContactDialog({int? index}) {
+    final nameCtrl = TextEditingController(
+      text: index != null ? _emergencyContacts[index]['name'] : '',
+    );
     final emailCtrl = TextEditingController(
       text: index != null ? _emergencyContacts[index]['email'] : '',
     );
@@ -108,21 +106,29 @@ class _SettingsPageState extends State<SettingsPage> {
         title: Text(index == null ? "Add Contact" : "Edit Contact"),
         content: Form(
           key: dialogKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: emailCtrl,
-                decoration: const InputDecoration(labelText: "Email"),
-                validator: _validateEmail,
-              ),
-              TextFormField(
-                controller: phoneCtrl,
-                decoration: const InputDecoration(labelText: "Phone"),
-                keyboardType: TextInputType.phone,
-                validator: _validatePhone,
-              ),
-            ],
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: "Full Name"),
+                  validator: (v) =>
+                      v!.isEmpty ? "Name is required by database" : null,
+                ),
+                TextFormField(
+                  controller: emailCtrl,
+                  decoration: const InputDecoration(labelText: "Email"),
+                  validator: _validateEmail,
+                ),
+                TextFormField(
+                  controller: phoneCtrl,
+                  decoration: const InputDecoration(labelText: "Phone"),
+                  keyboardType: TextInputType.phone,
+                  validator: _validatePhone,
+                ),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -135,6 +141,7 @@ class _SettingsPageState extends State<SettingsPage> {
               if (dialogKey.currentState!.validate()) {
                 setState(() {
                   final newContact = {
+                    "name": nameCtrl.text, // Added name
                     "email": emailCtrl.text,
                     "phone": phoneCtrl.text,
                   };
