@@ -5,8 +5,15 @@ const bcrypt = require("bcrypt");
 const nodemailer = require("nodemailer");
 
 const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+  service: "gmail", // Use 'service' for easier setup with Gmail
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS, // This must be the 16-character App Password
+  },
+  // Add this to handle potential certificate issues on Render
+  tls: {
+    rejectUnauthorized: false,
+  },
 });
 
 // 1. Get User Profile
