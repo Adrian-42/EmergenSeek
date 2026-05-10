@@ -123,24 +123,25 @@ router.post("/trigger-sos", async (req, res) => {
 
     // Sending via Resend API (HTTP instead of SMTP)
     const { data, error } = await resend.emails.send({
-      from: "EmergenSeek emergenseek.globalcity.sti.edu.ph", // Change to your verified domain later
+      // Format: "Display Name <anything@verified-domain>"
+      from: "EmergenSeek <sos@emergenseek.globalcity.sti.edu.ph>",
       to: recipientEmails,
       subject: `🚨 SOS Alert: ${user.name} needs help!`,
       html: `
-        <div style="font-family: sans-serif; padding: 20px; border: 2px solid red; border-radius: 10px;">
-          <h2 style="color: red;">🚨 EMERGENCY SOS ALERT</h2>
-          <p><b>${user.name}</b> has triggered an SOS alert and needs assistance.</p>
-          <p><b>Last Known Location:</b></p>
-          <div style="margin-top: 20px;">
-            <a href="${locationLink}" style="background: red; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">
-              View on Google Maps
-            </a>
-          </div>
-          <p style="margin-top: 20px; font-size: 12px; color: #666;">
-            This alert was sent via EmergenSeek Mobile App.
-          </p>
-        </div>
-      `,
+    <div style="font-family: sans-serif; padding: 20px; border: 2px solid red; border-radius: 10px;">
+      <h2 style="color: red;">🚨 EMERGENCY SOS ALERT</h2>
+      <p><b>${user.name}</b> has triggered an SOS alert and needs assistance.</p>
+      <p><b>Last Known Location:</b></p>
+      <div style="margin-top: 20px;">
+        <a href="${locationLink}" style="background: red; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+          View on Google Maps
+        </a>
+      </div>
+      <p style="margin-top: 20px; font-size: 12px; color: #666;">
+        This alert was sent via EmergenSeek Mobile App.
+      </p>
+    </div>
+  `,
     });
 
     if (error) {
