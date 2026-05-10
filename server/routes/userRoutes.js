@@ -68,56 +68,29 @@ router.put("/update-contacts", async (req, res) => {
 router.put("/change-password", async (req, res) => {
   const { userId, oldPassword, newPassword } = req.body;
 
-  // 2. Validate input presence
   if (!userId || !oldPassword || !newPassword) {
-    console.error("❌ Password Change Failed: Missing fields", {
-      userId: !!userId,
-      old: !!oldPassword,
-      new: !!newPassword,
-    });
-    return res
-      .status(400)
-      .json({
-        message: "All fields (ID, old, and new password) are required.",
-      });
+    return res.status(400).json({ message: "All fields are required." });
   }
 
   try {
     const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ message: "User not found in database." });
-    }
-
-    // 3. Compare current password
-    // This is often where the 500 happens if 'user.password' is missing or null
-    if (!user.password) {
-      return res
-        .status(500)
-        .json({ message: "User record is corrupted (no password found)." });
-    }
+    if (!user) return res.status(404).json({ message: "User not found." });
 
     const isMatch = await bcrypt.compare(oldPassword, user.password);
-    if (!isMatch) {
-      return res
-        .status(400)
-        .json({ message: "The current password you entered is incorrect." });
-    }
+    if (!isMatch)
+      return res.status(400).json({ message: "Incorrect current password." });
 
-    // 4. Hash and Save
     const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    user.password = await bcrypt.hash(newPassword, salt);
 
-    user.password = hashedPassword;
-    await user.save();
+    // FIX: Use validateModifiedOnly so it doesn't complain about
+    // missing 'name' in emergency contacts while we are only saving the password.
+    await user.save({ validateModifiedOnly: true });
 
-    console.log(`✅ Password updated for user: ${user.name}`);
     res.status(200).json({ message: "Password updated successfully!" });
   } catch (error) {
-    // 5. Catch the specific error to debug in Render logs
     console.error("🔥 Hashing/Database Error:", error.message);
-    res
-      .status(500)
-      .json({ message: "Internal server error during hashing process." });
+    res.status(500).json({ message: error.message });
   }
 });
 
