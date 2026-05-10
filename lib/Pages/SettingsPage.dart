@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:emergenseek/Pages/home_wrapper.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -146,13 +147,16 @@ class _SettingsPageState extends State<SettingsPage> {
   // --- LOGIC: LOGOUT ---
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
-    // Clearing 'role' and 'userId' will trigger HomeWrapper to show LoginPage
-    await prefs.remove('role');
-    await prefs.remove('userId');
+
+    // COMPLETELY clear all user data
+    await prefs.clear();
 
     if (mounted) {
-      // Pop all routes and go back to the wrapper/login
-      Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+      // Navigate to a clean slate. This forces HomeWrapper to rebuild.
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const HomeWrapper()),
+        (route) => false,
+      );
     }
   }
 

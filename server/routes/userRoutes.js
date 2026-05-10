@@ -67,6 +67,12 @@ router.put("/update-contacts", async (req, res) => {
 // 4. Change Password
 router.put("/change-password", async (req, res) => {
   const { userId, oldPassword, newPassword } = req.body;
+
+  // Debugging: This will show up in your Render logs
+  if (!oldPassword || !newPassword) {
+    return res.status(400).json({ message: "Missing password fields" });
+  }
+
   try {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -78,9 +84,13 @@ router.put("/change-password", async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
     await user.save();
+
     res.status(200).json({ message: "Password updated successfully" });
   } catch (error) {
-    res.status(500).json({ message: "Server error" });
+    console.error("Internal Password Error:", error); // Look for this in Render Logs
+    res
+      .status(500)
+      .json({ message: "Server error occurred while hashing password." });
   }
 });
 
@@ -89,21 +99,43 @@ router.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
   try {
     const user = await User.findById(userId);
-    if (!user || !user.emergencyContacts || user.emergencyContacts.length === 0)
-      return res.status(404).json({ error: "No contacts found" });
+
+    // Fix: Check if emergencyContacts exists and has length
+    if (
+      !user ||
+      !user.emergencyContacts ||
+      user.emergencyContacts.length === 0
+    ) {
+      return res
+        .status(404)
+        .json({ error: "No emergency contacts configured for this user." });
+    }
 
     const recipientEmails = user.emergencyContacts
       .map((c) => c.email)
+      .filter((e) => e != null && e !== "") // Ensure no empty strings
       .join(", ");
+
+    if (!recipientEmails)
+      return res
+        .status(400)
+        .json({ error: "Contacts exist but have no valid emails." });
+
     await transporter.sendMail({
       from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
       to: recipientEmails,
       subject: `🚨 SOS Alert: ${user.name} needs help!`,
       html: `<p><b>${user.name}</b> requested help.</p><p><a href="${locationLink}">View Location</a></p>`,
     });
+
     res.json({ message: "SOS Emails sent!" });
   } catch (err) {
-    res.status(500).json({ error: "Email failed" });
+    console.error("Email Error:", err);
+    res
+      .status(500)
+      .json({
+        error: "Email provider rejected the request. Check EMAIL_PASS.",
+      });
   }
 });
 
