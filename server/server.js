@@ -95,8 +95,10 @@ app.get("/get-directions", async (req, res) => {
   try {
     const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`;
     const response = await axios.get(url);
+
     res.json(response.data);
   } catch (error) {
+    console.error("Backend Directions Error:", error.message);
     res.status(500).json({ error: "Failed to fetch directions" });
   }
 });

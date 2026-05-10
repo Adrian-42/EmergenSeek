@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:emergenseek/services/socket_service.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:flutter_polyline_points/flutter_polyline_points.dart'; // Add this to pubspec
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:emergenseek/Pages/SettingsPage.dart';
 
 class EmergencyMapPage extends StatefulWidget {
@@ -34,8 +34,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
   String _currentType = '';
 
   final String baseUrl = "https://emergenseek.onrender.com";
-  // CRITICAL: You need your Google API Key here for road-routing
-  final String googleApiKey = "YOUR_GOOGLE_MAPS_API_KEY";
 
   @override
   void initState() {
@@ -58,14 +56,21 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     setState(() => navigationIcon = BitmapDescriptor.fromBytes(bytes));
   }
 
-  // --- LOCATION & ROAD ROUTING ---
+  // --- LOCATION & ROTATION LOGIC ---
   Future<void> _initLocationTracking() async {
     await Geolocator.requestPermission();
-    Geolocator.getPositionStream().listen((Position pos) {
-      setState(() {
-        currentPosition = pos;
-        _updateUserMarker(pos);
-      });
+    Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 2, // Updates more frequently for rotation smoothness
+      ),
+    ).listen((Position pos) {
+      if (mounted) {
+        setState(() {
+          currentPosition = pos;
+          _updateUserMarker(pos);
+        });
+      }
     });
   }
 
@@ -76,20 +81,40 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
         markerId: const MarkerId("me"),
         position: LatLng(pos.latitude, pos.longitude),
         icon: navigationIcon ?? BitmapDescriptor.defaultMarker,
-        rotation: pos.heading, // Arrow points in direction of travel
+        rotation: pos.heading, // CRITICAL: This rotates the PNG arrow
         anchor: const Offset(0.5, 0.5),
+        flat: true, // Keeps the icon flat against the map while rotating
+        zIndex: 5,
       ),
     );
   }
 
+  void _recenterCamera() {
+    if (currentPosition != null && mapController != null) {
+      mapController!.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(
+            target: LatLng(
+              currentPosition!.latitude,
+              currentPosition!.longitude,
+            ),
+            zoom: 17,
+            tilt: 45, // Slight tilt for a navigation feel
+          ),
+        ),
+      );
+    }
+  }
+
+  // --- ROUTING VIA BACKEND (CORS FIX) ---
   Future<void> _getRoadDirections(LatLng destination) async {
     if (currentPosition == null) return;
 
-    final url =
-        "https://maps.googleapis.com/maps/api/directions/json?"
-        "origin=${currentPosition!.latitude},${currentPosition!.longitude}"
-        "&destination=${destination.latitude},${destination.longitude}"
-        "&key=$googleApiKey";
+    final origin = "${currentPosition!.latitude},${currentPosition!.longitude}";
+    final dest = "${destination.latitude},${destination.longitude}";
+
+    // Using your Node.js backend to bypass CORS
+    final url = "$baseUrl/get-directions?origin=$origin&destination=$dest";
 
     try {
       final response = await http.get(Uri.parse(url));
@@ -101,16 +126,14 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           data['routes'][0]['overview_polyline']['points'],
         );
 
-        List<LatLng> roadCoordinates = result
-            .map((p) => LatLng(p.latitude, p.longitude))
-            .toList();
-
         setState(() {
           polylines.clear();
           polylines.add(
             Polyline(
               polylineId: const PolylineId("road_route"),
-              points: roadCoordinates,
+              points: result
+                  .map((p) => LatLng(p.latitude, p.longitude))
+                  .toList(),
               color: Colors.blueAccent,
               width: 6,
               jointType: JointType.round,
@@ -174,15 +197,11 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           markerId: const MarkerId("selected_facility"),
           position: pos,
           infoWindow: InfoWindow(title: place['name']),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            _currentType == 'hospital' ? 0.0 : 210.0,
-          ),
         ),
       );
     });
 
-    _getRoadDirections(pos); // Fetch actual road path
-    mapController?.animateCamera(CameraUpdate.newLatLngZoom(pos, 15));
+    _getRoadDirections(pos);
   }
 
   Future<void> _fetchNearby(String type) async {
@@ -221,13 +240,10 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           ),
           child: IconButton(
             icon: const Icon(Icons.settings, color: Colors.black87),
-            onPressed: () {
-              // NAVIGATION FIXED
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsPage()),
-              );
-            },
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const SettingsPage()),
+            ),
           ),
         ),
       ),
@@ -241,11 +257,41 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
             onMapCreated: (c) => mapController = c,
             markers: markers,
             polylines: polylines,
-            myLocationEnabled:
-                false, // Turned off to use our custom arrow instead
+            myLocationEnabled: false,
             zoomControlsEnabled: false,
           ),
 
+          // --- LEFT SIDE SOS BUTTON ---
+          Positioned(
+            left: 20,
+            bottom: 250, // Adjusted to be above the bottom sheet
+            child: FloatingActionButton(
+              heroTag: "sos_btn",
+              backgroundColor: isSafe ? Colors.red : Colors.grey,
+              child: const Text(
+                "SOS",
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              onPressed: () => _toggleSOS(!isSafe),
+            ),
+          ),
+
+          // --- RIGHT SIDE LOCATION FOCUS BUTTON ---
+          Positioned(
+            right: 20,
+            bottom: 250,
+            child: FloatingActionButton(
+              heroTag: "loc_btn",
+              backgroundColor: Colors.white,
+              child: const Icon(Icons.my_location, color: Colors.blue),
+              onPressed: _recenterCamera,
+            ),
+          ),
+
+          // --- BOTTOM INFO PANEL ---
           Positioned(
             bottom: 0,
             left: 0,
@@ -259,16 +305,12 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  SwitchListTile(
-                    title: Text(
-                      isSafe ? "Status: Safe" : "SOS ACTIVE",
-                      style: TextStyle(
-                        color: isSafe ? Colors.green : Colors.red,
-                        fontWeight: FontWeight.bold,
-                      ),
+                  Text(
+                    isSafe ? "You are marked safe" : "Help is on the way!",
+                    style: TextStyle(
+                      color: isSafe ? Colors.green : Colors.red,
+                      fontWeight: FontWeight.bold,
                     ),
-                    value: isSafe,
-                    onChanged: _toggleSOS,
                   ),
                   const SizedBox(height: 15),
                   Row(
@@ -296,39 +338,15 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
                   ),
                   if (_nearbyPlaces.isNotEmpty) ...[
                     const Divider(),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.arrow_back_ios),
-                          onPressed: () {
-                            setState(() {
-                              _currentIndex =
-                                  (_currentIndex - 1) % _nearbyPlaces.length;
-                              if (_currentIndex < 0)
-                                _currentIndex = _nearbyPlaces.length - 1;
-                            });
-                            _showCurrentFacility();
-                          },
-                        ),
-                        Expanded(
-                          child: Text(
-                            _nearbyPlaces[_currentIndex]['name'],
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.arrow_forward_ios),
-                          onPressed: () {
-                            setState(
-                              () => _currentIndex =
-                                  (_currentIndex + 1) % _nearbyPlaces.length,
-                            );
-                            _showCurrentFacility();
-                          },
-                        ),
-                      ],
+                    ListTile(
+                      title: Text(
+                        _nearbyPlaces[_currentIndex]['name'],
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.call, color: Colors.green),
+                        onPressed: () {},
+                      ),
                     ),
                   ],
                 ],
