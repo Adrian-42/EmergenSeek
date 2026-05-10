@@ -68,29 +68,31 @@ router.put("/update-contacts", async (req, res) => {
 router.put("/change-password", async (req, res) => {
   const { userId, oldPassword, newPassword } = req.body;
 
-  // Debugging: This will show up in your Render logs
-  if (!oldPassword || !newPassword) {
-    return res.status(400).json({ message: "Missing password fields" });
+  // Check if fields are missing before processing
+  if (!userId || !oldPassword || !newPassword) {
+    return res.status(400).json({ message: "All fields are required" });
   }
 
   try {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
 
+    // Compare old password
     const isMatch = await bcrypt.compare(oldPassword, user.password);
     if (!isMatch)
-      return res.status(400).json({ message: "Incorrect current password" });
+      return res.status(400).json({ message: "Current password is incorrect" });
 
+    // Hash new password
     const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(newPassword, salt);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    user.password = hashedPassword;
     await user.save();
 
     res.status(200).json({ message: "Password updated successfully" });
   } catch (error) {
-    console.error("Internal Password Error:", error); // Look for this in Render Logs
-    res
-      .status(500)
-      .json({ message: "Server error occurred while hashing password." });
+    console.error("Hash Error:", error);
+    res.status(500).json({ message: "Server error during password hashing" });
   }
 });
 
@@ -131,11 +133,9 @@ router.post("/trigger-sos", async (req, res) => {
     res.json({ message: "SOS Emails sent!" });
   } catch (err) {
     console.error("Email Error:", err);
-    res
-      .status(500)
-      .json({
-        error: "Email provider rejected the request. Check EMAIL_PASS.",
-      });
+    res.status(500).json({
+      error: "Email provider rejected the request. Check EMAIL_PASS.",
+    });
   }
 });
 

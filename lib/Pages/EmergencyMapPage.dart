@@ -12,7 +12,11 @@ import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:emergenseek/Pages/SettingsPage.dart';
 
 class EmergencyMapPage extends StatefulWidget {
-  const EmergencyMapPage({super.key});
+  // Add this line to accept the parameter
+  final bool isResponder;
+
+  // Update the constructor to include it
+  const EmergencyMapPage({super.key, this.isResponder = false});
 
   @override
   State<EmergencyMapPage> createState() => _EmergencyMapPageState();
