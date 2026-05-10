@@ -7,16 +7,22 @@ const nodemailer = require("nodemailer");
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 465,
-  secure: true, // SSL
+  secure: true,
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS, // 16-character App Password
+    pass: process.env.EMAIL_PASS,
   },
+  // FORCING IPV4: This addresses the ENETUNREACH error
+  connectionTimeout: 10000, // 10 seconds
+  greetingTimeout: 10000,
+  socketTimeout: 15000,
+  dnsServer: "8.8.8.8", // Use Google's DNS to ensure IPv4 resolution
   tls: {
-    rejectUnauthorized: false, // Prevents certificate issues on cloud servers
+    rejectUnauthorized: false,
+    // This tells the socket specifically how to behave
+    servername: "smtp.gmail.com",
   },
 });
-
 // 1. Get User Profile
 router.get("/:id", async (req, res) => {
   try {
