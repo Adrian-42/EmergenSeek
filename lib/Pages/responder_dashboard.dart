@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:emergenseek/Pages/EmergencyMapPage.dart';
 import 'package:emergenseek/services/socket_service.dart';
 
@@ -10,39 +12,68 @@ class ResponderDashboard extends StatefulWidget {
 }
 
 class _ResponderDashboardState extends State<ResponderDashboard> {
-  // This list will hold real-time emergencies received via Socket.io
   List<Map<String, dynamic>> activeEmergencies = [];
+  bool isLoading = true;
+  final String baseUrl = "https://emergenseek.onrender.com";
 
   @override
   void initState() {
     super.initState();
-    _listenForEmergencies();
+    _fetchInitialEmergencies(); // Fetch existing help requests
+    _listenForEmergencies(); // Listen for new real-time requests
+  }
+
+  /// Fetches users who currently have their SOS toggle turned "ON"
+  Future<void> _fetchInitialEmergencies() async {
+    try {
+      // Assuming your backend has an endpoint to get active emergencies
+      final response = await http.get(Uri.parse("$baseUrl/active-emergencies"));
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(response.body);
+        if (mounted) {
+          setState(() {
+            activeEmergencies = List<Map<String, dynamic>>.from(data);
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching initial emergencies: $e");
+      if (mounted) setState(() => isLoading = false);
+    }
   }
 
   void _listenForEmergencies() {
-    // We listen for the 'new_emergency_alert' event we added to the backend
-    SocketService().socket.on('new_emergency_alert', (data) {
-      if (mounted) {
-        setState(() {
-          // Check if this emergency is already in our list to avoid duplicates
-          bool exists = activeEmergencies.any(
-            (e) => e['userId'] == data['userId'],
-          );
-          if (!exists) {
-            activeEmergencies.insert(0, data); // Add new alerts to the top
-          }
-        });
-      }
-    });
+    try {
+      final socketInstance = SocketService().socket;
 
-    // Optional: Listen for when a victim turns their toggle back to "Safe"
-    SocketService().socket.on('status_changed', (data) {
-      if (data['isSafe'] == true && mounted) {
-        setState(() {
-          activeEmergencies.removeWhere((e) => e['userId'] == data['userId']);
-        });
-      }
-    });
+      // Listen for NEW alerts
+      socketInstance.on('new_emergency_alert', (data) {
+        if (mounted) {
+          setState(() {
+            bool exists = activeEmergencies.any(
+              (e) => e['userId'] == data['userId'],
+            );
+            if (!exists) {
+              activeEmergencies.insert(0, data);
+            }
+          });
+        }
+      });
+
+      // Listen for when a user is marked "Safe"
+      socketInstance.on('status_changed', (data) {
+        if (data['isSafe'] == true && mounted) {
+          setState(() {
+            activeEmergencies.removeWhere((e) => e['userId'] == data['userId']);
+          });
+        }
+      });
+    } catch (e) {
+      debugPrint("Socket not ready yet: $e");
+      Future.delayed(const Duration(seconds: 2), _listenForEmergencies);
+    }
   }
 
   @override
@@ -53,90 +84,132 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
         backgroundColor: Colors.redAccent,
         foregroundColor: Colors.white,
         actions: [
-          // Indicator to show the responder is online
-          const Padding(
-            padding: EdgeInsets.all(15.0),
-            child: CircleAvatar(backgroundColor: Colors.green, radius: 5),
+          // Visual indicator that the responder is "Live"
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 15.0),
+              child: Row(
+                children: [
+                  const Text(
+                    "LIVE",
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 5),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Colors.green,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
-      body: activeEmergencies.isEmpty
-          ? _buildEmptyState()
-          : ListView.builder(
-              itemCount: activeEmergencies.length,
-              itemBuilder: (context, index) {
-                final alert = activeEmergencies[index];
-                return Card(
-                  margin: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  elevation: 3,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15),
-                  ),
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.all(15),
-                    leading: const CircleAvatar(
-                      backgroundColor: Colors.red,
-                      child: Icon(
-                        Icons.warning_amber_rounded,
-                        color: Colors.white,
+      body: RefreshIndicator(
+        onRefresh: _fetchInitialEmergencies,
+        child: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : activeEmergencies.isEmpty
+            ? _buildEmptyState()
+            : ListView.builder(
+                itemCount: activeEmergencies.length,
+                itemBuilder: (context, index) {
+                  final alert = activeEmergencies[index];
+                  return Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    elevation: 4,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.all(15),
+                      leading: const CircleAvatar(
+                        backgroundColor: Colors.red,
+                        child: Icon(
+                          Icons.warning_amber_rounded,
+                          color: Colors.white,
+                        ),
                       ),
-                    ),
-                    title: Text(
-                      "Emergency: ${alert['userName'] ?? 'Unknown User'}",
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const SizedBox(height: 5),
-                        Text("User ID: ${alert['userId']}"),
-                        const Text(
-                          "Action: Immediate response required",
-                          style: TextStyle(color: Colors.red, fontSize: 12),
+                      title: Text(
+                        alert['userName'] ?? alert['name'] ?? 'Unknown User',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
                         ),
-                      ],
-                    ),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: () {
-                      // Pass the real userId to the Map Page
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => EmergencyMapPage(
-                            isResponder: true,
-                            activeEmergencyId:
-                                alert['userId'], // This is crucial!
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 4),
+                          Text("ID: ${alert['userId'] ?? alert['_id']}"),
+                          const Text(
+                            "STATUS: SOS TRIGGERED",
+                            style: TextStyle(
+                              color: Colors.red,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
                           ),
-                        ),
-                      );
-                    },
-                  ),
-                );
-              },
-            ),
+                        ],
+                      ),
+                      trailing: const Icon(
+                        Icons.arrow_forward_ios,
+                        size: 16,
+                        color: Colors.grey,
+                      ),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => EmergencyMapPage(
+                              isResponder: true,
+                              activeEmergencyId:
+                                  alert['userId'] ?? alert['_id'],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
+      ),
     );
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.shield_outlined, size: 80, color: Colors.grey.shade300),
-          const SizedBox(height: 15),
-          const Text(
-            "No active emergencies nearby",
-            style: TextStyle(color: Colors.grey, fontSize: 16),
+    return ListView(
+      // Wrap in ListView so RefreshIndicator still works
+      children: [
+        SizedBox(height: MediaQuery.of(context).size.height * 0.3),
+        const Center(
+          child: Column(
+            children: [
+              Icon(Icons.shield_outlined, size: 80, color: Colors.grey),
+              SizedBox(height: 15),
+              Text(
+                "No active emergencies",
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              Text(
+                "Monitoring for signals...",
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+            ],
           ),
-          const Text(
-            "Monitoring for signals...",
-            style: TextStyle(color: Colors.grey, fontSize: 12),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

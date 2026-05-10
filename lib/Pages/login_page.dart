@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:emergenseek/services/socket_service.dart'; // Ensure this is imported
 
 // Import your existing pages
 import 'EmergencyMapPage.dart';
@@ -20,8 +21,6 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController passwordController = TextEditingController();
 
   bool isLoading = false;
-
-  // Use your Render URL
   final String baseUrl = "https://emergenseek.onrender.com";
 
   @override
@@ -53,23 +52,26 @@ class _LoginPageState extends State<LoginPage> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('token', data['token']);
         await prefs.setString('userId', data['userId']);
-        await prefs.setString(
-          'role',
-          data['role'],
-        ); // Save role ('victim' or 'responder')
+        await prefs.setString('role', data['role']);
         await prefs.setString('userName', data['name'] ?? "User");
+
+        // --- THE CRITICAL FIX ---
+        // Initialize the socket immediately using the userId from the response
+        // This ensures the SocketService is ready before the next screen loads.
+        SocketService().initSocket(data['userId']);
+        // -------------------------
 
         if (!mounted) return;
 
         // 2. Role-Based Routing
         if (data['role'] == 'responder') {
-          print("Redirecting to Responder Dashboard...");
+          print("✅ Socket Initialized & Redirecting to Responder Dashboard...");
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (context) => const ResponderDashboard()),
           );
         } else {
-          print("Redirecting to Victim Map...");
+          print("✅ Socket Initialized & Redirecting to Victim Map...");
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
@@ -84,7 +86,7 @@ class _LoginPageState extends State<LoginPage> {
       print("Login Error: $e");
       _showError("Connection error. Is the server running?");
     } finally {
-      setState(() => isLoading = false);
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
@@ -123,7 +125,6 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 40),
 
-                  /// EMAIL FIELD
                   TextFormField(
                     controller: emailController,
                     keyboardType: TextInputType.emailAddress,
@@ -139,7 +140,6 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 20),
 
-                  /// PASSWORD FIELD
                   TextFormField(
                     controller: passwordController,
                     obscureText: true,
@@ -154,7 +154,6 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 30),
 
-                  /// LOGIN BUTTON
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.red,
@@ -163,11 +162,17 @@ class _LoginPageState extends State<LoginPage> {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      elevation: 2,
                     ),
                     onPressed: isLoading ? null : loginUser,
                     child: isLoading
-                        ? const CircularProgressIndicator(color: Colors.white)
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
                         : const Text(
                             "LOGIN",
                             style: TextStyle(

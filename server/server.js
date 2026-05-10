@@ -101,6 +101,28 @@ app.get("/directions", async (req, res) => {
   }
 });
 
+app.get("/active-emergencies", async (req, res) => {
+  try {
+    // Find all users where isSafe is false (meaning they triggered SOS)
+    const activeUsers = await User.find({ isSafe: false })
+      .select("-password") // Don't send passwords
+      .sort({ updatedAt: -1 }); // Show newest first
+
+    // Map the data to match the format your Flutter app expects
+    const formattedEmergencies = activeUsers.map((user) => ({
+      userId: user._id,
+      userName: user.name,
+      location: user.lastLocation,
+      phoneNumber: user.phoneNumber, // Useful for responders
+    }));
+
+    res.json(formattedEmergencies);
+  } catch (err) {
+    console.error("Error fetching active emergencies:", err);
+    res.status(500).json({ error: "Failed to fetch active emergencies" });
+  }
+});
+
 // 3. Update User Safety Status & Notify Responders
 app.put("/user/status", async (req, res) => {
   const { userId, isSafe, lastLocation } = req.body;
@@ -111,24 +133,31 @@ app.put("/user/status", async (req, res) => {
       { new: true },
     );
 
-    // If the user toggles to "NOT safe" (Help Needed)
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // If the user toggles to "NOT safe" (SOS Triggered)
     if (!isSafe) {
-      // 1. Global Alert: Tell all responders a new emergency exists
+      console.log(`🚨 SOS Triggered by: ${user.name}`);
+
+      // 1. Global Alert: Tell all connected responders to add this to their list
       io.emit("new_emergency_alert", {
         userId: user._id,
         userName: user.name,
         location: lastLocation,
       });
-
-      // 2. Room Event: If a responder is already in the room, update their UI
-      io.to(userId.toString()).emit("status_changed", { isSafe: false });
     } else {
-      // If they toggle back to safe, clear the alert for responders
-      io.to(userId.toString()).emit("status_changed", { isSafe: true });
+      console.log(`✅ User marked SAFE: ${user.name}`);
+
+      // 2. Global Alert: Tell all responders to remove this user from their list
+      io.emit("status_changed", {
+        userId: user._id,
+        isSafe: true,
+      });
     }
 
-    res.json({ message: "Status updated", isSafe: user.isSafe });
+    res.json({ message: "Status updated successfully", isSafe: user.isSafe });
   } catch (err) {
+    console.error("Status update error:", err);
     res.status(500).json({ error: "Failed to update status" });
   }
 });
