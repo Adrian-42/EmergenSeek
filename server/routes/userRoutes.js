@@ -104,34 +104,55 @@ router.put("/change-password", async (req, res) => {
 // 5. Trigger SOS Email
 router.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
-  console.log("📩 SOS Request Received for ID:", userId); // Added for debugging
+  console.log("-----------------------------------------");
+  console.log("📩 SOS Request Received for ID:", userId);
 
   try {
     const user = await User.findById(userId);
 
-    if (
-      !user ||
-      !user.emergencyContacts ||
-      user.emergencyContacts.length === 0
-    ) {
-      console.log("❌ SOS Failed: No contacts for user", userId);
+    // 1. Check User existence
+    if (!user) {
+      console.error("❌ ERROR: User not found in database.");
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    console.log(`👤 User Found: ${user.name}`);
+    console.log(`🗂 Emergency Contacts Raw:`, user.emergencyContacts);
+
+    // 2. Check for Contacts
+    if (!user.emergencyContacts || user.emergencyContacts.length === 0) {
+      console.warn("⚠️ SOS STOPPED: User has no emergency contacts.");
       return res
         .status(404)
         .json({ error: "No emergency contacts configured." });
     }
 
+    // 3. Extract and Filter Emails
     const recipientEmails = user.emergencyContacts
       .map((c) => c.email)
-      .filter((e) => e != null && e !== "")
-      .join(", ");
+      .filter((e) => e != null && e !== "");
 
-    if (!recipientEmails) {
+    console.log(`📧 Filtered Recipients:`, recipientEmails);
+
+    if (recipientEmails.length === 0) {
+      console.warn(
+        "⚠️ SOS STOPPED: Contacts found but emails are missing/null.",
+      );
       return res.status(400).json({ error: "No valid emails in contacts." });
     }
 
-    await transporter.sendMail({
+    const emailList = recipientEmails.join(", ");
+
+    // 4. Attempt to Send
+    console.log("🚀 Attempting to send email via Transporter...");
+
+    // Verify transporter configuration before sending
+    await transporter.verify();
+    console.log("✅ SMTP Connection Verified.");
+
+    const info = await transporter.sendMail({
       from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
-      to: recipientEmails,
+      to: emailList,
       subject: `🚨 SOS Alert: ${user.name} needs help!`,
       html: `
         <div style="font-family: sans-serif; padding: 20px; border: 2px solid red;">
@@ -143,11 +164,29 @@ router.post("/trigger-sos", async (req, res) => {
       `,
     });
 
-    console.log("✅ SOS Emails sent to:", recipientEmails);
+    console.log("✅ SOS Emails successfully accepted by provider!");
+    console.log("📬 Message ID:", info.messageId);
+    console.log("-----------------------------------------");
+
     res.json({ message: "SOS Emails sent!" });
   } catch (err) {
-    console.error("🔥 Email Error:", err);
-    res.status(500).json({ error: "Email provider rejected the request." });
+    // 5. Catch Specific SMTP Errors
+    console.error("🔥 SOS FATAL ERROR:", err.message);
+    if (err.code === "EAUTH") {
+      console.error(
+        "💡 TIP: Authentication failed. Check EMAIL_PASS (App Password).",
+      );
+    } else if (err.code === "ESOCKET") {
+      console.error(
+        "💡 TIP: Network/Connection issue. Check firewall or port settings.",
+      );
+    }
+
+    console.log("-----------------------------------------");
+    res.status(500).json({
+      error: "Email provider rejected the request.",
+      details: err.message,
+    });
   }
 });
 // ADD THIS: Update Personal Phone Number
