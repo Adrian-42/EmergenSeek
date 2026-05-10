@@ -31,23 +31,64 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadUserData();
   }
 
+  // --- VALIDATORS ---
+  String? _validateEmail(String? value) {
+    if (value == null || value.isEmpty) return "Required";
+    final regex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    return regex.hasMatch(value) ? null : "Enter a valid email";
+  }
+
+  String? _validatePhone(String? value) {
+    if (value == null || value.isEmpty) return "Required";
+    final regex = RegExp(r'^(09|\+639)\d{9}$');
+    return regex.hasMatch(value) ? null : "Use 09xxxxxxxxx";
+  }
+
   Future<void> _loadUserData() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
+    if (userId == null) return;
 
-    if (userId != null) {
-      try {
-        final response = await http.get(Uri.parse("$baseUrl/user/$userId"));
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          setState(() {
-            _personalPhoneController.text = data['phoneNumber'] ?? '';
-            _emergencyContacts = data['emergencyContacts'] ?? [];
-          });
-        }
-      } catch (e) {
-        debugPrint("Load error: $e");
+    try {
+      final response = await http.get(Uri.parse("$baseUrl/user/$userId"));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          _personalPhoneController.text = data['phoneNumber'] ?? '';
+          _emergencyContacts = data['emergencyContacts'] ?? [];
+        });
       }
+    } catch (e) {
+      debugPrint("Load error: $e");
+    }
+  }
+
+  // --- LOGIC: UPDATE PERSONAL PHONE ---
+  Future<void> _updatePersonalPhone() async {
+    if (!_personalFormKey.currentState!.validate()) return;
+    setState(() => _isLoading = true);
+
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getString('userId');
+
+    try {
+      final response = await http.put(
+        Uri.parse("$baseUrl/user/update-phone"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "userId": userId,
+          "phoneNumber": _personalPhoneController.text,
+        }),
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            response.statusCode == 200 ? "Phone updated!" : "Update failed",
+          ),
+        ),
+      );
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
@@ -59,24 +100,30 @@ class _SettingsPageState extends State<SettingsPage> {
     final phoneCtrl = TextEditingController(
       text: index != null ? _emergencyContacts[index]['phone'] : '',
     );
+    final dialogKey = GlobalKey<FormState>();
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(index == null ? "Add Contact" : "Edit Contact"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: emailCtrl,
-              decoration: const InputDecoration(labelText: "Email"),
-            ),
-            TextField(
-              controller: phoneCtrl,
-              decoration: const InputDecoration(labelText: "Phone"),
-              keyboardType: TextInputType.phone,
-            ),
-          ],
+        content: Form(
+          key: dialogKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: emailCtrl,
+                decoration: const InputDecoration(labelText: "Email"),
+                validator: _validateEmail,
+              ),
+              TextFormField(
+                controller: phoneCtrl,
+                decoration: const InputDecoration(labelText: "Phone"),
+                keyboardType: TextInputType.phone,
+                validator: _validatePhone,
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -85,19 +132,21 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           ElevatedButton(
             onPressed: () {
-              setState(() {
-                final newContact = {
-                  "email": emailCtrl.text,
-                  "phone": phoneCtrl.text,
-                };
-                if (index == null) {
-                  _emergencyContacts.add(newContact);
-                } else {
-                  _emergencyContacts[index] = newContact;
-                }
-              });
-              _syncContacts();
-              Navigator.pop(context);
+              if (dialogKey.currentState!.validate()) {
+                setState(() {
+                  final newContact = {
+                    "email": emailCtrl.text,
+                    "phone": phoneCtrl.text,
+                  };
+                  if (index == null) {
+                    _emergencyContacts.add(newContact);
+                  } else {
+                    _emergencyContacts[index] = newContact;
+                  }
+                });
+                _syncContacts();
+                Navigator.pop(context);
+              }
             },
             child: const Text("Save"),
           ),
@@ -121,11 +170,18 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _changePassword() async {
     if (!_passwordFormKey.currentState!.validate()) return;
-    setState(() => _isLoading = true);
 
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
 
+    if (userId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Session expired. Please login again.")),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
     try {
       final response = await http.put(
         Uri.parse("$baseUrl/user/change-password"),
@@ -138,13 +194,17 @@ class _SettingsPageState extends State<SettingsPage> {
       );
 
       final result = jsonDecode(response.body);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(result['message'])));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result['message'] ?? "Error occurred")),
+      );
       if (response.statusCode == 200) {
         _oldPasswordController.clear();
         _newPasswordController.clear();
       }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Network error. Try again.")),
+      );
     } finally {
       setState(() => _isLoading = false);
     }
@@ -181,12 +241,24 @@ class _SettingsPageState extends State<SettingsPage> {
                   _buildCard(
                     child: Form(
                       key: _personalFormKey,
-                      child: TextFormField(
-                        controller: _personalPhoneController,
-                        decoration: const InputDecoration(
-                          labelText: "My Phone Number",
-                          prefixIcon: Icon(Icons.phone),
-                        ),
+                      child: Column(
+                        children: [
+                          TextFormField(
+                            controller: _personalPhoneController,
+                            validator: _validatePhone,
+                            keyboardType: TextInputType.phone,
+                            decoration: const InputDecoration(
+                              labelText: "My Phone Number",
+                              prefixIcon: Icon(Icons.phone),
+                              hintText: "09123456789",
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          ElevatedButton(
+                            onPressed: _updatePersonalPhone,
+                            child: const Text("Save Phone Number"),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -234,6 +306,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             decoration: const InputDecoration(
                               labelText: "Old Password",
                             ),
+                            validator: (v) => v!.isEmpty ? "Required" : null,
                           ),
                           const SizedBox(height: 10),
                           TextFormField(
@@ -242,6 +315,8 @@ class _SettingsPageState extends State<SettingsPage> {
                             decoration: const InputDecoration(
                               labelText: "New Password",
                             ),
+                            validator: (v) =>
+                                v!.length < 6 ? "Min 6 chars" : null,
                           ),
                           const SizedBox(height: 15),
                           ElevatedButton(

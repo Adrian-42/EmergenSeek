@@ -68,31 +68,56 @@ router.put("/update-contacts", async (req, res) => {
 router.put("/change-password", async (req, res) => {
   const { userId, oldPassword, newPassword } = req.body;
 
-  // Check if fields are missing before processing
+  // 2. Validate input presence
   if (!userId || !oldPassword || !newPassword) {
-    return res.status(400).json({ message: "All fields are required" });
+    console.error("❌ Password Change Failed: Missing fields", {
+      userId: !!userId,
+      old: !!oldPassword,
+      new: !!newPassword,
+    });
+    return res
+      .status(400)
+      .json({
+        message: "All fields (ID, old, and new password) are required.",
+      });
   }
 
   try {
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) {
+      return res.status(404).json({ message: "User not found in database." });
+    }
 
-    // Compare old password
+    // 3. Compare current password
+    // This is often where the 500 happens if 'user.password' is missing or null
+    if (!user.password) {
+      return res
+        .status(500)
+        .json({ message: "User record is corrupted (no password found)." });
+    }
+
     const isMatch = await bcrypt.compare(oldPassword, user.password);
-    if (!isMatch)
-      return res.status(400).json({ message: "Current password is incorrect" });
+    if (!isMatch) {
+      return res
+        .status(400)
+        .json({ message: "The current password you entered is incorrect." });
+    }
 
-    // Hash new password
+    // 4. Hash and Save
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
     user.password = hashedPassword;
     await user.save();
 
-    res.status(200).json({ message: "Password updated successfully" });
+    console.log(`✅ Password updated for user: ${user.name}`);
+    res.status(200).json({ message: "Password updated successfully!" });
   } catch (error) {
-    console.error("Hash Error:", error);
-    res.status(500).json({ message: "Server error during password hashing" });
+    // 5. Catch the specific error to debug in Render logs
+    console.error("🔥 Hashing/Database Error:", error.message);
+    res
+      .status(500)
+      .json({ message: "Internal server error during hashing process." });
   }
 });
 
@@ -136,6 +161,21 @@ router.post("/trigger-sos", async (req, res) => {
     res.status(500).json({
       error: "Email provider rejected the request. Check EMAIL_PASS.",
     });
+  }
+});
+// ADD THIS: Update Personal Phone Number
+router.put("/update-phone", async (req, res) => {
+  const { userId, phoneNumber } = req.body;
+  try {
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $set: { phoneNumber: phoneNumber } },
+      { new: true },
+    );
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.status(200).json({ message: "Phone number updated successfully" });
+  } catch (error) {
+    res.status(500).json({ message: "Server error" });
   }
 });
 
