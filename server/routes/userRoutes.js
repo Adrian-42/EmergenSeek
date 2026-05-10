@@ -6,21 +6,17 @@ const nodemailer = require("nodemailer");
 
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
+  port: 587, // Switch to 587
+  secure: false, // Must be false for 587
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
-  // FORCING IPV4: This addresses the ENETUNREACH error
-  connectionTimeout: 10000, // 10 seconds
-  greetingTimeout: 10000,
-  socketTimeout: 15000,
-  dnsServer: "8.8.8.8", // Use Google's DNS to ensure IPv4 resolution
+  connectionTimeout: 20000, // Increase to 20 seconds
   tls: {
+    // This forces the connection to stay on IPv4
     rejectUnauthorized: false,
-    // This tells the socket specifically how to behave
-    servername: "smtp.gmail.com",
+    minVersion: "TLSv1.2",
   },
 });
 // 1. Get User Profile
