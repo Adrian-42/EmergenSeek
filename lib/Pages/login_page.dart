@@ -74,9 +74,7 @@ class _LoginPageState extends State<LoginPage> {
           print("✅ Socket Initialized & Redirecting to Victim Map...");
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (context) => const EmergencyMapPage(isResponder: false),
-            ),
+            MaterialPageRoute(builder: (context) => const EmergencyMapPage()),
           );
         }
       } else {

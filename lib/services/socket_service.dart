@@ -7,16 +7,7 @@ class SocketService {
   factory SocketService() => _instance;
   SocketService._internal();
 
-  // Changed to nullable to prevent LateInitializationError
   IO.Socket? _socket;
-
-  // Safe getter: if the socket isn't ready, it returns a dummy or triggers init
-  IO.Socket get socket {
-    if (_socket == null) {
-      throw Exception("Socket not initialized. Call initSocket() first.");
-    }
-    return _socket!;
-  }
 
   // Streams for UI updates
   final _locationStreamController = StreamController<LatLng>.broadcast();
@@ -27,8 +18,15 @@ class SocketService {
   Stream<Map<String, dynamic>> get messageStream =>
       _messageStreamController.stream;
 
+  // Safe getter for the socket instance
+  IO.Socket get socket {
+    if (_socket == null) {
+      throw Exception("Socket not initialized. Call initSocket(userId) first.");
+    }
+    return _socket!;
+  }
+
   void initSocket(String userId) {
-    // Prevent multiple initializations
     if (_socket != null) return;
 
     _socket = IO.io(
@@ -42,17 +40,26 @@ class SocketService {
 
     _socket!.connect();
 
-    _socket!.onConnect((_) => print('✅ Connected to EmergenSeek Socket'));
+    _socket!.onConnect((_) {
+      print('✅ Connected to EmergenSeek Socket: $userId');
+    });
 
     // --- LISTENERS ---
+
+    // Listener for live location updates (Used by Responders)
     _socket!.on('location_received', (data) {
-      if (data['lat'] != null && data['lng'] != null) {
-        _locationStreamController.add(
-          LatLng(data['lat'].toDouble(), data['lng'].toDouble()),
-        );
+      try {
+        if (data['lat'] != null && data['lng'] != null) {
+          double lat = double.parse(data['lat'].toString());
+          double lng = double.parse(data['lng'].toString());
+          _locationStreamController.add(LatLng(lat, lng));
+        }
+      } catch (e) {
+        print('❌ Error parsing location data: $e');
       }
     });
 
+    // Listener for chat messages
     _socket!.on('message_received', (data) {
       _messageStreamController.add(data);
     });
@@ -61,20 +68,26 @@ class SocketService {
     _socket!.onDisconnect((_) => print('🔌 Disconnected from Server'));
   }
 
+  /// Called by Responders to join a specific victim's emergency room
   void startEmergencyStreaming(String emergencyId) {
-    socket.emit('join_emergency', emergencyId);
+    if (_socket?.connected ?? false) {
+      print('📡 Joining Emergency Room: $emergencyId');
+      _socket!.emit('join_emergency', emergencyId);
+    }
   }
 
-  void sendLiveLocation(String emergencyId, double lat, double lng) {
+  /// Called by Citizens/Victims to push their live location to responders
+  void sendLiveLocation(String userId, double lat, double lng) {
     if (_socket?.connected ?? false) {
       _socket!.emit('update_location', {
-        'emergencyId': emergencyId,
+        'emergencyId': userId, // In your logic, the userId is the room ID
         'lat': lat,
         'lng': lng,
       });
     }
   }
 
+  /// Shared messaging function for both roles
   void sendMessage(String emergencyId, String text, String senderId) {
     if (_socket?.connected ?? false) {
       _socket!.emit('send_message', {
@@ -89,6 +102,7 @@ class SocketService {
   void dispose() {
     _locationStreamController.close();
     _messageStreamController.close();
+    _socket?.disconnect();
     _socket?.dispose();
     _socket = null;
   }

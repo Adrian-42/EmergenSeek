@@ -81,7 +81,7 @@ class HomeWrapper extends StatelessWidget {
         if (role == 'responder') {
           return const ResponderDashboard();
         } else {
-          return const EmergencyMapPage(isResponder: false);
+          return const EmergencyMapPage();
         }
       },
     );

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:emergenseek/Pages/EmergencyMapPage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:emergenseek/Pages/responderMapPage.dart'; // Updated Import
 import 'package:emergenseek/services/socket_service.dart';
 
 class ResponderDashboard extends StatefulWidget {
@@ -19,14 +20,23 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
   @override
   void initState() {
     super.initState();
-    _fetchInitialEmergencies(); // Fetch existing help requests
-    _listenForEmergencies(); // Listen for new real-time requests
+    _fetchInitialEmergencies();
+    _listenForEmergencies();
   }
 
-  /// Fetches users who currently have their SOS toggle turned "ON"
+  /// Clears user session and cleans up resources
+  Future<void> _logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    SocketService().dispose();
+
+    if (!mounted) return;
+    Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
+  }
+
+  /// Fetches users who currently have SOS active from the database
   Future<void> _fetchInitialEmergencies() async {
     try {
-      // Assuming your backend has an endpoint to get active emergencies
       final response = await http.get(Uri.parse("$baseUrl/active-emergencies"));
 
       if (response.statusCode == 200) {
@@ -48,13 +58,15 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
     try {
       final socketInstance = SocketService().socket;
 
-      // Listen for NEW alerts
+      // Handle NEW incoming emergency alerts
       socketInstance.on('new_emergency_alert', (data) {
         if (mounted) {
           setState(() {
+            String newId = data['userId'] ?? data['_id'];
             bool exists = activeEmergencies.any(
-              (e) => e['userId'] == data['userId'],
+              (e) => (e['userId'] ?? e['_id']) == newId,
             );
+
             if (!exists) {
               activeEmergencies.insert(0, data);
             }
@@ -62,16 +74,20 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
         }
       });
 
-      // Listen for when a user is marked "Safe"
+      // Remove emergencies when a user marks themselves as "Safe"
       socketInstance.on('status_changed', (data) {
         if (data['isSafe'] == true && mounted) {
           setState(() {
-            activeEmergencies.removeWhere((e) => e['userId'] == data['userId']);
+            String safeId = data['userId'] ?? data['_id'];
+            activeEmergencies.removeWhere(
+              (e) => (e['userId'] ?? e['_id']) == safeId,
+            );
           });
         }
       });
     } catch (e) {
-      debugPrint("Socket not ready yet: $e");
+      // If socket isn't ready yet, retry shortly
+      debugPrint("Socket initializing... retrying listener: $e");
       Future.delayed(const Duration(seconds: 2), _listenForEmergencies);
     }
   }
@@ -84,28 +100,24 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
         backgroundColor: Colors.redAccent,
         foregroundColor: Colors.white,
         actions: [
-          // Visual indicator that the responder is "Live"
-          Center(
+          const Center(
             child: Padding(
-              padding: const EdgeInsets.only(right: 15.0),
+              padding: EdgeInsets.symmetric(horizontal: 8.0),
               child: Row(
                 children: [
-                  const Text(
+                  Text(
                     "LIVE",
                     style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(width: 5),
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
+                  SizedBox(width: 5),
+                  CircleAvatar(backgroundColor: Colors.green, radius: 4),
                 ],
               ),
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () => _confirmLogout(),
           ),
         ],
       ),
@@ -116,15 +128,21 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
             : activeEmergencies.isEmpty
             ? _buildEmptyState()
             : ListView.builder(
+                padding: const EdgeInsets.only(top: 10),
                 itemCount: activeEmergencies.length,
                 itemBuilder: (context, index) {
                   final alert = activeEmergencies[index];
+                  final String victimId =
+                      alert['userId'] ?? alert['_id'] ?? 'unknown';
+                  final String victimName =
+                      alert['userName'] ?? alert['name'] ?? 'Unknown User';
+
                   return Card(
                     margin: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 6,
                     ),
-                    elevation: 4,
+                    elevation: 3,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(15),
                     ),
@@ -138,41 +156,38 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
                         ),
                       ),
                       title: Text(
-                        alert['userName'] ?? alert['name'] ?? 'Unknown User',
+                        victimName,
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
-                          fontSize: 18,
+                          fontSize: 17,
                         ),
                       ),
                       subtitle: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const SizedBox(height: 4),
-                          Text("ID: ${alert['userId'] ?? alert['_id']}"),
+                          Text(
+                            "ID: $victimId",
+                            style: const TextStyle(fontSize: 12),
+                          ),
                           const Text(
-                            "STATUS: SOS TRIGGERED",
+                            "SOS ACTIVE - NEEDS ASSISTANCE",
                             style: TextStyle(
                               color: Colors.red,
                               fontWeight: FontWeight.bold,
-                              fontSize: 12,
+                              fontSize: 11,
                             ),
                           ),
                         ],
                       ),
-                      trailing: const Icon(
-                        Icons.arrow_forward_ios,
-                        size: 16,
-                        color: Colors.grey,
-                      ),
+                      trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                       onTap: () {
+                        // NAVIGATE TO THE SPECIALIZED RESPONDER MAP
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => EmergencyMapPage(
-                              isResponder: true,
-                              activeEmergencyId:
-                                  alert['userId'] ?? alert['_id'],
-                            ),
+                            builder: (context) =>
+                                ResponderMapPage(activeEmergencyId: victimId),
                           ),
                         );
                       },
@@ -184,9 +199,28 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
     );
   }
 
+  void _confirmLogout() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Logout"),
+        content: const Text("Confirm logout from responder session?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: _logout,
+            child: const Text("Logout", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildEmptyState() {
     return ListView(
-      // Wrap in ListView so RefreshIndicator still works
       children: [
         SizedBox(height: MediaQuery.of(context).size.height * 0.3),
         const Center(

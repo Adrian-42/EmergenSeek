@@ -90,7 +90,7 @@ app.get("/places", async (req, res) => {
 });
 
 // 2. Fetch Directions
-app.get("/directions", async (req, res) => {
+app.get("/get-directions", async (req, res) => {
   const { origin, destination } = req.query;
   try {
     const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`;

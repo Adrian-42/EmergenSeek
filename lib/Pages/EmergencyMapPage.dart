@@ -5,482 +5,333 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-
-import 'SettingsPage.dart';
 import 'package:emergenseek/services/socket_service.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart'; // Add this to pubspec
+import 'package:emergenseek/Pages/SettingsPage.dart';
 
 class EmergencyMapPage extends StatefulWidget {
-  final bool isResponder;
-  final String? activeEmergencyId; // This is the Victim's User ID
-
-  const EmergencyMapPage({
-    super.key,
-    this.isResponder = false,
-    this.activeEmergencyId,
-  });
+  const EmergencyMapPage({super.key});
 
   @override
   State<EmergencyMapPage> createState() => _EmergencyMapPageState();
 }
 
-class _EmergencyMapPageState extends State<EmergencyMapPage>
-    with TickerProviderStateMixin {
+class _EmergencyMapPageState extends State<EmergencyMapPage> {
   GoogleMapController? mapController;
   Position? currentPosition;
-  StreamSubscription<Position>? positionStream;
-  StreamSubscription<LatLng>? victimSocketStream;
+  Timer? _socketTimer;
+  BitmapDescriptor? navigationIcon;
 
   Set<Marker> markers = {};
   Set<Polyline> polylines = {};
-  BitmapDescriptor? userIcon;
-  bool isAppReady = false;
-
-  // --- Dynamic User Data ---
-  String victimName = "Loading...";
   bool isSafe = true;
-  LatLng? liveVictimLocation;
 
-  late AnimationController sosPulseController;
-  late Animation<double> sosPulseAnimation;
+  List<dynamic> _nearbyPlaces = [];
+  int _currentIndex = 0;
+  String _currentType = '';
 
   final String baseUrl = "https://emergenseek.onrender.com";
-
-  final List<Map<String, dynamic>> emergencyServices = [
-    {
-      "title": "Medical",
-      "icon": Icons.local_hospital,
-      "type": "hospital",
-      "color": Colors.red,
-    },
-    {
-      "title": "Police",
-      "icon": Icons.local_police,
-      "type": "police",
-      "color": Colors.blue,
-    },
-    {
-      "title": "Fire Dept",
-      "icon": Icons.local_fire_department,
-      "type": "fire_station",
-      "color": Colors.orange,
-    },
-  ];
+  // CRITICAL: You need your Google API Key here for road-routing
+  final String googleApiKey = "YOUR_GOOGLE_MAPS_API_KEY";
 
   @override
   void initState() {
     super.initState();
     _loadCustomMarker();
-    _initApp();
-    _setupSocketListeners();
-
-    // If we are a responder, fetch the victim's actual profile info
-    if (widget.isResponder && widget.activeEmergencyId != null) {
-      _fetchVictimProfile();
-    }
-
-    sosPulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat();
-    sosPulseAnimation = Tween<double>(begin: 1.0, end: 1.4).animate(
-      CurvedAnimation(parent: sosPulseController, curve: Curves.easeOut),
-    );
-  }
-
-  @override
-  void dispose() {
-    positionStream?.cancel();
-    victimSocketStream?.cancel();
-    sosPulseController.dispose();
-    if (mapController != null) mapController = null;
-    super.dispose();
-  }
-
-  // --- NEW: Fetch Victim Data for Responder Dashboard ---
-  Future<void> _fetchVictimProfile() async {
-    try {
-      final response = await http.get(
-        Uri.parse("$baseUrl/user/${widget.activeEmergencyId}"),
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (mounted) {
-          setState(() {
-            victimName = data['name'] ?? "Unknown Victim";
-            isSafe = data['isSafe'] ?? true;
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint("Error fetching victim profile: $e");
-    }
-  }
-
-  // --- NEW: Toggle Safety Status (For Victim side) ---
-  Future<void> _toggleSafetyStatus(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString('userId');
-
-    setState(() => isSafe = value);
-
-    try {
-      await http.put(
-        Uri.parse("$baseUrl/user/status"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "userId": userId,
-          "isSafe": isSafe,
-          "lastLocation": {
-            "lat": currentPosition?.latitude,
-            "lng": currentPosition?.longitude,
-          },
-        }),
-      );
-
-      if (!isSafe) {
-        HapticFeedback.heavyImpact();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Emergency Broadcasted to Responders!"),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
-      debugPrint("Error updating status: $e");
-    }
-  }
-
-  void _setupSocketListeners() {
-    victimSocketStream = SocketService().locationStream.listen((
-      LatLng newLocation,
-    ) {
-      if (!mounted) return;
-      setState(() {
-        liveVictimLocation = newLocation;
-        _updateVictimMarker(newLocation);
-        if (widget.isResponder && mapController != null) {
-          mapController!.animateCamera(CameraUpdate.newLatLng(newLocation));
-        }
-      });
-    });
-  }
-
-  Future<void> _initApp() async {
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    try {
-      Position pos = await Geolocator.getCurrentPosition();
-      _handleLocationUpdate(pos);
-    } catch (e) {
-      debugPrint("Location error: $e");
-    }
-
-    positionStream = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
-      ),
-    ).listen((pos) => _handleLocationUpdate(pos));
-
-    if (widget.isResponder && widget.activeEmergencyId != null) {
-      SocketService().startEmergencyStreaming(widget.activeEmergencyId!);
-    }
-
-    if (mounted) setState(() => isAppReady = true);
-  }
-
-  void _handleLocationUpdate(Position pos) {
-    if (!mounted) return;
-    setState(() {
-      currentPosition = pos;
-      markers.removeWhere((m) => m.markerId.value == "user_location");
-      markers.add(
-        Marker(
-          markerId: const MarkerId("user_location"),
-          position: LatLng(pos.latitude, pos.longitude),
-          icon:
-              userIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueCyan),
-          rotation: pos.heading,
-          anchor: const Offset(0.5, 0.5),
-          flat: true,
-          zIndex: 2,
-        ),
-      );
-    });
-
-    if (!widget.isResponder && widget.activeEmergencyId != null) {
-      SocketService().sendLiveLocation(
-        widget.activeEmergencyId!,
-        pos.latitude,
-        pos.longitude,
-      );
-    }
-  }
-
-  void _updateVictimMarker(LatLng pos) {
-    if (!mounted) return;
-    setState(() {
-      markers.removeWhere((m) => m.markerId.value == "victim_location");
-      markers.add(
-        Marker(
-          markerId: const MarkerId("victim_location"),
-          position: pos,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-          infoWindow: InfoWindow(
-            title: widget.isResponder ? "VICTIM: $victimName" : "MY LOCATION",
-          ),
-          zIndex: 3,
-        ),
-      );
-    });
+    _initLocationTracking();
   }
 
   // --- ASSET LOADING ---
   Future<void> _loadCustomMarker() async {
+    final data = await rootBundle.load('assets/navigation_arrow.png');
+    final codec = await ui.instantiateImageCodec(
+      data.buffer.asUint8List(),
+      targetWidth: 100,
+    );
+    final fi = await codec.getNextFrame();
+    final bytes = (await fi.image.toByteData(
+      format: ui.ImageByteFormat.png,
+    ))!.buffer.asUint8List();
+    setState(() => navigationIcon = BitmapDescriptor.fromBytes(bytes));
+  }
+
+  // --- LOCATION & ROAD ROUTING ---
+  Future<void> _initLocationTracking() async {
+    await Geolocator.requestPermission();
+    Geolocator.getPositionStream().listen((Position pos) {
+      setState(() {
+        currentPosition = pos;
+        _updateUserMarker(pos);
+      });
+    });
+  }
+
+  void _updateUserMarker(Position pos) {
+    markers.removeWhere((m) => m.markerId.value == "me");
+    markers.add(
+      Marker(
+        markerId: const MarkerId("me"),
+        position: LatLng(pos.latitude, pos.longitude),
+        icon: navigationIcon ?? BitmapDescriptor.defaultMarker,
+        rotation: pos.heading, // Arrow points in direction of travel
+        anchor: const Offset(0.5, 0.5),
+      ),
+    );
+  }
+
+  Future<void> _getRoadDirections(LatLng destination) async {
+    if (currentPosition == null) return;
+
+    final url =
+        "https://maps.googleapis.com/maps/api/directions/json?"
+        "origin=${currentPosition!.latitude},${currentPosition!.longitude}"
+        "&destination=${destination.latitude},${destination.longitude}"
+        "&key=$googleApiKey";
+
     try {
-      final Uint8List markerIcon = await _getBytesFromAsset(
-        'assets/navigation_arrow.png',
-        48,
-      );
-      if (mounted)
-        setState(() => userIcon = BitmapDescriptor.fromBytes(markerIcon));
+      final response = await http.get(Uri.parse(url));
+      final data = jsonDecode(response.body);
+
+      if (data['status'] == 'OK') {
+        final polylinePoints = PolylinePoints();
+        List<PointLatLng> result = polylinePoints.decodePolyline(
+          data['routes'][0]['overview_polyline']['points'],
+        );
+
+        List<LatLng> roadCoordinates = result
+            .map((p) => LatLng(p.latitude, p.longitude))
+            .toList();
+
+        setState(() {
+          polylines.clear();
+          polylines.add(
+            Polyline(
+              polylineId: const PolylineId("road_route"),
+              points: roadCoordinates,
+              color: Colors.blueAccent,
+              width: 6,
+              jointType: JointType.round,
+            ),
+          );
+        });
+      }
     } catch (e) {
-      debugPrint("Asset loading error: $e");
+      debugPrint("Directions Error: $e");
     }
   }
 
-  Future<Uint8List> _getBytesFromAsset(String path, int width) async {
-    ByteData data = await rootBundle.load(path);
-    ui.Codec codec = await ui.instantiateImageCodec(
-      data.buffer.asUint8List(),
-      targetWidth: width,
+  // --- SOS & FACILITY LOGIC ---
+  Future<void> _toggleSOS(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getString('userId') ?? "unknown";
+    setState(() => isSafe = value);
+
+    await http.put(
+      Uri.parse("$baseUrl/user/status"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "userId": userId,
+        "isSafe": isSafe,
+        "lastLocation": {
+          "lat": currentPosition?.latitude,
+          "lng": currentPosition?.longitude,
+        },
+      }),
     );
-    ui.FrameInfo fi = await codec.getNextFrame();
-    return (await fi.image.toByteData(
-      format: ui.ImageByteFormat.png,
-    ))!.buffer.asUint8List();
+
+    if (!isSafe) {
+      _socketTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+        if (currentPosition != null && !isSafe) {
+          SocketService().sendLiveLocation(
+            userId,
+            currentPosition!.latitude,
+            currentPosition!.longitude,
+          );
+        } else {
+          timer.cancel();
+        }
+      });
+    } else {
+      _socketTimer?.cancel();
+    }
   }
 
-  void _centerOnUser() {
-    if (currentPosition != null && mapController != null) {
-      mapController!.animateCamera(
-        CameraUpdate.newLatLngZoom(
-          LatLng(currentPosition!.latitude, currentPosition!.longitude),
-          16,
+  void _showCurrentFacility() {
+    if (_nearbyPlaces.isEmpty) return;
+    final place = _nearbyPlaces[_currentIndex];
+    final pos = LatLng(
+      place['geometry']['location']['lat'],
+      place['geometry']['location']['lng'],
+    );
+
+    setState(() {
+      markers.removeWhere((m) => m.markerId.value == "selected_facility");
+      markers.add(
+        Marker(
+          markerId: const MarkerId("selected_facility"),
+          position: pos,
+          infoWindow: InfoWindow(title: place['name']),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            _currentType == 'hospital' ? 0.0 : 210.0,
+          ),
         ),
       );
+    });
+
+    _getRoadDirections(pos); // Fetch actual road path
+    mapController?.animateCamera(CameraUpdate.newLatLngZoom(pos, 15));
+  }
+
+  Future<void> _fetchNearby(String type) async {
+    if (currentPosition == null) return;
+    try {
+      final res = await http.get(
+        Uri.parse(
+          "$baseUrl/places?lat=${currentPosition!.latitude}&lng=${currentPosition!.longitude}&type=$type",
+        ),
+      );
+      if (res.statusCode == 200) {
+        setState(() {
+          _nearbyPlaces = jsonDecode(res.body)['results'];
+          _currentIndex = 0;
+          _currentType = type;
+        });
+        _showCurrentFacility();
+      }
+    } catch (e) {
+      debugPrint(e.toString());
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: Container(
+          margin: const EdgeInsets.all(8),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: const Icon(Icons.settings, color: Colors.black87),
+            onPressed: () {
+              // NAVIGATION FIXED
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsPage()),
+              );
+            },
+          ),
+        ),
+      ),
       body: Stack(
         children: [
           GoogleMap(
             initialCameraPosition: const CameraPosition(
-              target: LatLng(14.5995, 120.9842),
-              zoom: 14,
+              target: LatLng(14.59, 120.98),
+              zoom: 15,
             ),
+            onMapCreated: (c) => mapController = c,
             markers: markers,
             polylines: polylines,
-            onMapCreated: (c) {
-              if (mounted) mapController = c;
-            },
-            myLocationEnabled: false,
-            myLocationButtonEnabled: false,
+            myLocationEnabled:
+                false, // Turned off to use our custom arrow instead
             zoomControlsEnabled: false,
-            padding: EdgeInsets.only(bottom: widget.isResponder ? 200 : 180),
           ),
 
-          // Top Header Area
-          Positioned(
-            top: 50,
-            left: 20,
-            right: 20,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                FloatingActionButton.small(
-                  heroTag: "center",
-                  backgroundColor: Colors.white,
-                  onPressed: _centerOnUser,
-                  child: const Icon(Icons.my_location, color: Colors.blue),
-                ),
-                FloatingActionButton.small(
-                  heroTag: "settings",
-                  backgroundColor: Colors.white,
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const SettingsPage(),
-                    ),
-                  ),
-                  child: const Icon(Icons.settings, color: Colors.black87),
-                ),
-              ],
-            ),
-          ),
-
-          // SOS Pulse Button (Citizen/Victim Only)
-          if (!widget.isResponder)
-            Positioned(
-              bottom: 180,
-              right: 20,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  ScaleTransition(
-                    scale: sosPulseAnimation,
-                    child: Container(
-                      width: 75,
-                      height: 75,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.red.withOpacity(0.3),
-                      ),
-                    ),
-                  ),
-                  FloatingActionButton(
-                    heroTag: "sos",
-                    backgroundColor: Colors.red,
-                    onPressed: () => _toggleSafetyStatus(false),
-                    child: const Text(
-                      "SOS",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          // Bottom Dynamic Panel
           Positioned(
             bottom: 0,
             left: 0,
             right: 0,
-            child: widget.isResponder
-                ? _buildResponderPanel()
-                : _buildVictimPanel(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVictimPanel() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 15, 20, 35),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 15)],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                isSafe ? "STATUS: SAFE" : "STATUS: NEED HELP",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: isSafe ? Colors.green : Colors.red,
-                ),
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
               ),
-              Switch(
-                value: isSafe,
-                activeColor: Colors.green,
-                onChanged: (val) => _toggleSafetyStatus(val),
-              ),
-            ],
-          ),
-          const Divider(),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: emergencyServices.map((s) {
-              return Column(
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  IconButton(
-                    icon: Icon(s["icon"], color: s["color"]),
-                    onPressed: () {},
+                  SwitchListTile(
+                    title: Text(
+                      isSafe ? "Status: Safe" : "SOS ACTIVE",
+                      style: TextStyle(
+                        color: isSafe ? Colors.green : Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    value: isSafe,
+                    onChanged: _toggleSOS,
                   ),
-                  Text(s["title"], style: const TextStyle(fontSize: 11)),
+                  const SizedBox(height: 15),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildServiceBtn(
+                        "Medical",
+                        Icons.local_hospital,
+                        Colors.red,
+                        'hospital',
+                      ),
+                      _buildServiceBtn(
+                        "Police",
+                        Icons.local_police,
+                        Colors.blue,
+                        'police',
+                      ),
+                      _buildServiceBtn(
+                        "Fire",
+                        Icons.local_fire_department,
+                        Colors.orange,
+                        'fire_station',
+                      ),
+                    ],
+                  ),
+                  if (_nearbyPlaces.isNotEmpty) ...[
+                    const Divider(),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back_ios),
+                          onPressed: () {
+                            setState(() {
+                              _currentIndex =
+                                  (_currentIndex - 1) % _nearbyPlaces.length;
+                              if (_currentIndex < 0)
+                                _currentIndex = _nearbyPlaces.length - 1;
+                            });
+                            _showCurrentFacility();
+                          },
+                        ),
+                        Expanded(
+                          child: Text(
+                            _nearbyPlaces[_currentIndex]['name'],
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.arrow_forward_ios),
+                          onPressed: () {
+                            setState(
+                              () => _currentIndex =
+                                  (_currentIndex + 1) % _nearbyPlaces.length,
+                            );
+                            _showCurrentFacility();
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildResponderPanel() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 15)],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.red.shade50,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: const Text(
-              "ACTIVE MISSION",
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Colors.red,
-                fontSize: 12,
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          ListTile(
-            leading: const CircleAvatar(
-              backgroundColor: Colors.red,
-              child: Icon(Icons.person, color: Colors.white),
-            ),
-            title: Text("Victim: $victimName"),
-            subtitle: Text(
-              liveVictimLocation != null
-                  ? "Signal: Live Tracking"
-                  : "Waiting for GPS...",
-            ),
-            trailing: IconButton(
-              icon: const Icon(Icons.message, color: Colors.blue),
-              onPressed: () {},
-            ),
-          ),
-          ElevatedButton.icon(
-            onPressed: _launchNavigation,
-            icon: const Icon(Icons.navigation),
-            label: const Text("LAUNCH GOOGLE MAPS"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-              foregroundColor: Colors.white,
-              minimumSize: const Size(double.infinity, 55),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15),
               ),
             ),
           ),
@@ -489,12 +340,20 @@ class _EmergencyMapPageState extends State<EmergencyMapPage>
     );
   }
 
-  void _launchNavigation() async {
-    if (liveVictimLocation == null) return;
-    final url =
-        'https://www.google.com/maps/dir/?api=1&destination=${liveVictimLocation!.latitude},${liveVictimLocation!.longitude}&travelmode=driving';
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    }
+  Widget _buildServiceBtn(
+    String label,
+    IconData icon,
+    Color color,
+    String type,
+  ) {
+    return Column(
+      children: [
+        IconButton(
+          onPressed: () => _fetchNearby(type),
+          icon: Icon(icon, color: color, size: 30),
+        ),
+        Text(label, style: const TextStyle(fontSize: 12)),
+      ],
+    );
   }
 }
