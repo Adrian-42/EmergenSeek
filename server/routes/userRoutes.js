@@ -34,6 +34,7 @@ router.put("/status", async (req, res) => {
       io.emit("new_emergency_alert", {
         userId: user._id,
         userName: user.name,
+        phoneNumber: user.phoneNumber,
         location: lastLocation,
       });
     } else {
