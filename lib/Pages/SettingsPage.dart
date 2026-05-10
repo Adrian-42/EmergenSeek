@@ -63,7 +63,6 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  // --- LOGIC: UPDATE PERSONAL PHONE ---
   Future<void> _updatePersonalPhone() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
