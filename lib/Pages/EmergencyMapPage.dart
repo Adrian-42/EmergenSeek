@@ -12,10 +12,7 @@ import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:emergenseek/Pages/SettingsPage.dart';
 
 class EmergencyMapPage extends StatefulWidget {
-  // Add this line to accept the parameter
   final bool isResponder;
-
-  // Update the constructor to include it
   const EmergencyMapPage({super.key, this.isResponder = false});
 
   @override
@@ -66,11 +63,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
   // --- CALL LOGIC ---
   Future<void> _makeCall() async {
     if (_nearbyPlaces.isEmpty) return;
-    final placeId = _nearbyPlaces[_currentIndex]['place_id'];
-
-    // Some place results don't have phone numbers in the basic search.
-    // If you need the phone number, you'd usually fetch Place Details.
-    // For now, we'll try to get it from results or use a placeholder if unavailable.
     String? phoneNumber =
         _nearbyPlaces[_currentIndex]['formatted_phone_number'];
 
@@ -88,49 +80,75 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     }
   }
 
-  // --- SOS EMAIL LOGIC (SOLO) ---
+  // --- SOS EMAIL LOGIC ---
   Future<void> _sendSOSAlert() async {
+    if (currentPosition == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Wait for GPS location before sending SOS."),
+        ),
+      );
+      return;
+    }
+
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
-    if (userId == null) return;
+    if (userId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("User ID not found. Please log in again."),
+        ),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Sending SOS Alerts..."),
+        duration: Duration(seconds: 2),
+      ),
+    );
 
     try {
-      final response = await http.get(Uri.parse("$baseUrl/user/$userId"));
+      // Formats the location link for Google Maps
+      final String locationLink =
+          "https://www.google.com/maps?q=${currentPosition!.latitude},${currentPosition!.longitude}";
+
+      final response = await http.post(
+        Uri.parse("$baseUrl/user/trigger-sos"),
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: jsonEncode({"userId": userId, "locationLink": locationLink}),
+      );
+
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final List<dynamic> contacts = data['emergencyContacts'] ?? [];
-        if (contacts.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("No emergency contacts found.")),
-          );
-          return;
-        }
-
-        final List<String> emailList = contacts
-            .map((c) => c['email'].toString())
-            .where((e) => e.isNotEmpty)
-            .toList();
-
-        final String recipientString = emailList.join(',');
-        final String subject = Uri.encodeComponent("EMERGENCY: SOS ALERT");
-        String locationLink = currentPosition != null
-            ? "https://www.google.com/maps?q=${currentPosition!.latitude},${currentPosition!.longitude}"
-            : "Location not available";
-
-        final String body = Uri.encodeComponent(
-          "Automated SOS alert. Need help.\nLocation: $locationLink",
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("SOS SUCCESS: Emails sent to contacts!"),
+            backgroundColor: Colors.green,
+          ),
         );
-
-        final Uri emailUri = Uri.parse(
-          "mailto:$recipientString?subject=$subject&body=$body",
+      } else {
+        final errorData = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              "SOS FAILED: ${errorData['error'] ?? 'Unknown error'}",
+            ),
+            backgroundColor: Colors.red,
+          ),
         );
-
-        if (await canLaunchUrl(emailUri)) {
-          await launchUrl(emailUri);
-        }
       }
     } catch (e) {
-      debugPrint("SOS Error: $e");
+      debugPrint("SOS Fetch Error: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Connection Error. Is the server awake?"),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -200,39 +218,34 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
 
     double arrowSizeDegrees = _calculateDynamicSize(_currentZoom);
     double bearingRad = bearing * math.pi / 180.0;
-
     double offset = arrowSizeDegrees * 0.05;
-    double anchorLat = start.latitude + offset * math.cos(bearingRad);
-    double anchorLng = start.longitude + offset * math.sin(bearingRad);
-    LatLng anchor = LatLng(anchorLat, anchorLng);
-
-    double peakLat = anchor.latitude + arrowSizeDegrees * math.cos(bearingRad);
-    double peakLng = anchor.longitude + arrowSizeDegrees * math.sin(bearingRad);
-    LatLng peak = LatLng(peakLat, peakLng);
+    double peakLat =
+        (start.latitude + offset * math.cos(bearingRad)) +
+        arrowSizeDegrees * math.cos(bearingRad);
+    double peakLng =
+        (start.longitude + offset * math.sin(bearingRad)) +
+        arrowSizeDegrees * math.sin(bearingRad);
 
     double sideOffset = arrowSizeDegrees * 0.6;
-    double baseAngleOffsetRad = math.pi / 2;
-
     double bLeftLat =
-        start.latitude + sideOffset * math.cos(bearingRad - baseAngleOffsetRad);
+        start.latitude + sideOffset * math.cos(bearingRad - (math.pi / 2));
     double bLeftLng =
-        start.longitude +
-        sideOffset * math.sin(bearingRad - baseAngleOffsetRad);
-    LatLng baseLeft = LatLng(bLeftLat, bLeftLng);
-
+        start.longitude + sideOffset * math.sin(bearingRad - (math.pi / 2));
     double bRightLat =
-        start.latitude + sideOffset * math.cos(bearingRad + baseAngleOffsetRad);
+        start.latitude + sideOffset * math.cos(bearingRad + (math.pi / 2));
     double bRightLng =
-        start.longitude +
-        sideOffset * math.sin(bearingRad + baseAngleOffsetRad);
-    LatLng baseRight = LatLng(bRightLat, bRightLng);
+        start.longitude + sideOffset * math.sin(bearingRad + (math.pi / 2));
 
     setState(() {
       polygons.clear();
       polygons.add(
         Polygon(
           polygonId: const PolygonId("dynamic_arrow"),
-          points: [baseLeft, peak, baseRight],
+          points: [
+            LatLng(bLeftLat, bLeftLng),
+            LatLng(peakLat, peakLng),
+            LatLng(bRightLat, bRightLng),
+          ],
           fillColor: Colors.blue.withOpacity(0.9),
           strokeWidth: 0,
           zIndex: 10,
@@ -275,14 +288,16 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           polylines.clear();
           polylines.add(
             Polyline(
-              polylineId: const PolylineId("road_route"),
+              polylineId:
+                  const PolygonId("road_route").toString() == "road_route"
+                  ? const PolylineId("road_route")
+                  : const PolylineId("road_route"),
               points: polylineCoordinates,
               color: Colors.blueAccent,
               width: 6,
               jointType: JointType.round,
             ),
           );
-
           markers.clear();
           markers.add(
             Marker(
@@ -318,20 +333,15 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     );
   }
 
-  void _nextPlace() {
-    if (_nearbyPlaces.isEmpty) return;
-    setState(() => _currentIndex = (_currentIndex + 1) % _nearbyPlaces.length);
+  void _nextPlace() => setState(() {
+    _currentIndex = (_currentIndex + 1) % _nearbyPlaces.length;
     _showCurrentFacility();
-  }
-
-  void _prevPlace() {
-    if (_nearbyPlaces.isEmpty) return;
-    setState(
-      () => _currentIndex =
-          (_currentIndex - 1 + _nearbyPlaces.length) % _nearbyPlaces.length,
-    );
+  });
+  void _prevPlace() => setState(() {
+    _currentIndex =
+        (_currentIndex - 1 + _nearbyPlaces.length) % _nearbyPlaces.length;
     _showCurrentFacility();
-  }
+  });
 
   Future<void> _fetchNearby(String type) async {
     if (currentPosition == null) return;
@@ -409,13 +419,14 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
             },
           ),
 
-          // SOS BUTTON (SEND EMAIL)
+          // SOS BUTTON
           Positioned(
             left: 20,
             top: 480,
             child: FloatingActionButton(
               heroTag: "sos_email",
               backgroundColor: Colors.red,
+              onPressed: _sendSOSAlert,
               child: const Text(
                 "SOS",
                 style: TextStyle(
@@ -423,38 +434,37 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              onPressed: _sendSOSAlert,
             ),
           ),
 
-          // SAFETY TOGGLE BUTTON (SAFE / HELP)
+          // SAFETY TOGGLE
           Positioned(
             left: 20,
             top: 550,
             child: FloatingActionButton(
               heroTag: "status_toggle",
               backgroundColor: isSafe ? Colors.green : Colors.orange,
+              onPressed: () => _updateSafetyStatus(!isSafe),
               child: Icon(
                 isSafe ? Icons.check_circle : Icons.warning,
                 color: Colors.white,
               ),
-              onPressed: () => _updateSafetyStatus(!isSafe),
             ),
           ),
 
-          // LOCATION RECENTER BUTTON
+          // RECENTER
           Positioned(
             right: 20,
             top: 550,
             child: FloatingActionButton(
               heroTag: "loc",
               backgroundColor: Colors.white,
-              child: const Icon(Icons.my_location, color: Colors.blue),
               onPressed: _recenterCamera,
+              child: const Icon(Icons.my_location, color: Colors.blue),
             ),
           ),
 
-          // BOTTOM INFO PANEL
+          // BOTTOM PANEL
           Positioned(
             bottom: 0,
             left: 0,

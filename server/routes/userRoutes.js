@@ -97,43 +97,50 @@ router.put("/change-password", async (req, res) => {
 // 5. Trigger SOS Email
 router.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
+  console.log("📩 SOS Request Received for ID:", userId); // Added for debugging
+
   try {
     const user = await User.findById(userId);
 
-    // Fix: Check if emergencyContacts exists and has length
     if (
       !user ||
       !user.emergencyContacts ||
       user.emergencyContacts.length === 0
     ) {
+      console.log("❌ SOS Failed: No contacts for user", userId);
       return res
         .status(404)
-        .json({ error: "No emergency contacts configured for this user." });
+        .json({ error: "No emergency contacts configured." });
     }
 
     const recipientEmails = user.emergencyContacts
       .map((c) => c.email)
-      .filter((e) => e != null && e !== "") // Ensure no empty strings
+      .filter((e) => e != null && e !== "")
       .join(", ");
 
-    if (!recipientEmails)
-      return res
-        .status(400)
-        .json({ error: "Contacts exist but have no valid emails." });
+    if (!recipientEmails) {
+      return res.status(400).json({ error: "No valid emails in contacts." });
+    }
 
     await transporter.sendMail({
       from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
       to: recipientEmails,
       subject: `🚨 SOS Alert: ${user.name} needs help!`,
-      html: `<p><b>${user.name}</b> requested help.</p><p><a href="${locationLink}">View Location</a></p>`,
+      html: `
+        <div style="font-family: sans-serif; padding: 20px; border: 2px solid red;">
+          <h2>🚨 EMERGENCY SOS ALERT</h2>
+          <p><b>${user.name}</b> has triggered an SOS alert and needs assistance.</p>
+          <p><b>Last Known Location:</b></p>
+          <a href="${locationLink}" style="background: red; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">View on Google Maps</a>
+        </div>
+      `,
     });
 
+    console.log("✅ SOS Emails sent to:", recipientEmails);
     res.json({ message: "SOS Emails sent!" });
   } catch (err) {
-    console.error("Email Error:", err);
-    res.status(500).json({
-      error: "Email provider rejected the request. Check EMAIL_PASS.",
-    });
+    console.error("🔥 Email Error:", err);
+    res.status(500).json({ error: "Email provider rejected the request." });
   }
 });
 // ADD THIS: Update Personal Phone Number
