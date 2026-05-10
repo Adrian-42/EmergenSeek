@@ -123,7 +123,7 @@ router.post("/trigger-sos", async (req, res) => {
 
     // Sending via Resend API (HTTP instead of SMTP)
     const { data, error } = await resend.emails.send({
-      from: "EmergenSeek <onboarding@resend.dev>", // Change to your verified domain later
+      from: "EmergenSeek emergenseek.globalcity.sti.edu.ph", // Change to your verified domain later
       to: recipientEmails,
       subject: `🚨 SOS Alert: ${user.name} needs help!`,
       html: `
