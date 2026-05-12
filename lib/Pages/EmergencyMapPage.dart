@@ -134,6 +134,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
       return;
     }
 
+    // Show a "Loading" snackbar so the user knows something is happening
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text("Sending SOS Alerts..."),
@@ -145,16 +146,19 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
       final String locationLink =
           "https://www.google.com/maps/search/?api=1&query=${currentPosition!.latitude},${currentPosition!.longitude}";
 
-      final response = await http.post(
-        Uri.parse("$baseUrl/user/trigger-sos"),
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
-        body: jsonEncode({"userId": userId, "locationLink": locationLink}),
-      );
+      final response = await http
+          .post(
+            Uri.parse("$baseUrl/user/trigger-sos"),
+            headers: {
+              "Content-Type": "application/json",
+              "Accept": "application/json",
+            },
+            body: jsonEncode({"userId": userId, "locationLink": locationLink}),
+          )
+          .timeout(const Duration(seconds: 15)); // Add a timeout
 
       if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("SOS SUCCESS: Emails sent!"),
@@ -162,16 +166,30 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           ),
         );
       } else {
+        // Server returned an error (like the 500 you are seeing)
         final errorData = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("SOS FAILED: ${errorData['error']}"),
+            content: Text(
+              "SERVER ERROR: ${errorData['error'] ?? 'Unknown Error'}",
+            ),
             backgroundColor: Colors.red,
           ),
         );
       }
     } catch (e) {
+      // This catches network issues, timeouts, or DNS failures
       debugPrint("SOS Fetch Error: $e");
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "NETWORK ERROR: Check your connection or server status.",
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 

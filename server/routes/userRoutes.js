@@ -6,12 +6,20 @@ const nodemailer = require("nodemailer");
 
 // Configure your nodemailer transporter
 // Note: Use an App Password if using Gmail, not your primary password.
+// Configure your nodemailer transporter
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true, // Use SSL
   auth: {
     user: "emergenseek000@gmail.com",
-    pass: "sjyc aqal opec psjh",
+    pass: process.env.EMAIL_PASSWORD,
   },
+  // ADD THIS BLOCK TO FIX ENETUNREACH
+  tls: {
+    rejectUnauthorized: false, // Helps with some cloud network restrictions
+  },
+  connectionTimeout: 10000, // 10 seconds
 });
 
 // 1. Get User Profile
