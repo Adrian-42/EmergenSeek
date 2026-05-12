@@ -13,7 +13,7 @@ const transporter = nodemailer.createTransport({
   secure: false, // Use false for 587, true for 465
   auth: {
     user: "emergenseek000@gmail.com",
-    pass: process.env.EMAIL_PASSWORD,
+    pass: "sjyc aqal opec psjh", // Use an App Password for Gmail
   },
   tls: {
     // This helps if the server has trouble verifying the certificate
