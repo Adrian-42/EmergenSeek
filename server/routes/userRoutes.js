@@ -3,8 +3,16 @@ const router = express.Router();
 const User = require("../models/User");
 const bcrypt = require("bcrypt");
 const nodemailer = require("nodemailer");
-const { Resend } = require("resend");
-const resend = new Resend(process.env.RESEND_API_KEY);
+
+// Configure your nodemailer transporter
+// Note: Use an App Password if using Gmail, not your primary password.
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: "emergenseek000@gmail.com",
+    pass: "sjyc aqal opec psjh",
+  },
+});
 
 // 1. Get User Profile
 router.get("/:id", async (req, res) => {
@@ -81,8 +89,6 @@ router.put("/change-password", async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
 
-    // FIX: Use validateModifiedOnly so it doesn't complain about
-    // missing 'name' in emergency contacts while we are only saving the password.
     await user.save({ validateModifiedOnly: true });
 
     res.status(200).json({ message: "Password updated successfully!" });
@@ -92,7 +98,7 @@ router.put("/change-password", async (req, res) => {
   }
 });
 
-// ADD THIS: Update Personal Phone Number
+// 5. Update Personal Phone Number
 router.put("/update-phone", async (req, res) => {
   const { userId, phoneNumber } = req.body;
   try {
@@ -105,6 +111,62 @@ router.put("/update-phone", async (req, res) => {
     res.status(200).json({ message: "Phone number updated successfully" });
   } catch (error) {
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// 6. Trigger SOS Email
+router.post("/trigger-sos", async (req, res) => {
+  const { userId, locationLink } = req.body;
+
+  if (!userId || !locationLink) {
+    return res.status(400).json({ error: "Missing userId or locationLink" });
+  }
+
+  try {
+    // Fetch user and their emergency contacts
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (!user.emergencyContacts || user.emergencyContacts.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "User has no emergency contacts saved." });
+    }
+
+    // Map through the contacts to get all email addresses
+    const recipientList = user.emergencyContacts.map((c) => c.email).join(", ");
+
+    const mailOptions = {
+      from: '"EmergenSeek SOS" <emergenseek000@gmail.com>',
+      to: recipientList,
+      subject: `🚨 EMERGENCY: SOS Alert from ${user.name}`,
+      text: `Emergency alert triggered! \n\nUser: ${user.name} \nPhone: ${user.phoneNumber} \nLocation: ${locationLink}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; border: 2px solid red; padding: 20px; border-radius: 10px;">
+          <h2 style="color: red; text-align: center;">🚨 Emergency SOS Alert</h2>
+          <p>This is an automated emergency message from <strong>EmergenSeek</strong>.</p>
+          <hr />
+          <p><strong>User:</strong> ${user.name}</p>
+          <p><strong>Phone:</strong> ${user.phoneNumber || "Not provided"}</p>
+          <p><strong>Status:</strong> Triggered SOS Alert</p>
+          <p>The user is requesting help. You can view their current location by clicking the button below:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${locationLink}" style="background-color: red; color: white; padding: 15px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">View Location on Maps</a>
+          </div>
+          <p style="font-size: 12px; color: #555;">If the button doesn't work, copy and paste this link: ${locationLink}</p>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`SOS Email sent to: ${recipientList}`);
+    res.status(200).json({ message: "SOS Emails sent successfully!" });
+  } catch (error) {
+    console.error("Nodemailer/Database Error:", error);
+    res.status(500).json({ error: "Failed to send SOS email." });
   }
 });
 

@@ -98,39 +98,6 @@ app.get("/active-emergencies", async (req, res) => {
   }
 });
 
-app.post("/user/trigger-sos", async (req, res) => {
-  const { userId, locationLink } = req.body;
-
-  if (!userId || !locationLink) {
-    return res.status(400).json({ error: "Missing userId or locationLink" });
-  }
-
-  // Define email content
-  const mailOptions = {
-    from: '"EmergenSeek SOS" <your-email@gmail.com>',
-    to: "emergency-contact@example.com", // In production, fetch this from your DB using userId
-    subject: `🚨 EMERGENCY: SOS Alert from User ${userId}`,
-    text: `Emergency alert triggered! \n\nUser ID: ${userId} \nLocation: ${locationLink}`,
-    html: `
-      <div style="font-family: Arial, sans-serif; border: 2px solid red; padding: 20px;">
-        <h2 style="color: red;">🚨 Emergency SOS Alert</h2>
-        <p><strong>User ID:</strong> ${userId}</p>
-        <p>A user has triggered an emergency alert. You can view their live location below:</p>
-        <a href="${locationLink}" style="background-color: red; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">View Location on Google Maps</a>
-      </div>
-    `,
-  };
-
-  try {
-    await transporter.sendMail(mailOptions);
-    console.log(`SOS Sent for user: ${userId}`);
-    res.status(200).json({ message: "SOS Emails sent successfully!" });
-  } catch (error) {
-    console.error("Nodemailer Error:", error);
-    res.status(500).json({ error: "Failed to send SOS email." });
-  }
-});
-
 // --- SOCKET.IO REAL-TIME LOGIC ---
 io.on("connection", (socket) => {
   console.log(`🔌 User Connected: ${socket.id}`);
