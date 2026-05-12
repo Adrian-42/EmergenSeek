@@ -9,19 +9,21 @@ const nodemailer = require("nodemailer");
 // Configure your nodemailer transporter
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
-  port: 465,
-  secure: true, // Use SSL
+  port: 587,
+  secure: false, // Use false for 587, true for 465
   auth: {
     user: "emergenseek000@gmail.com",
     pass: process.env.EMAIL_PASSWORD,
   },
-  // ADD THIS BLOCK TO FIX ENETUNREACH
   tls: {
-    rejectUnauthorized: false, // Helps with some cloud network restrictions
+    // This helps if the server has trouble verifying the certificate
+    // or is forced into specific IPv4/IPv6 behavior
+    rejectUnauthorized: false,
+    minVersion: "TLSv1.2",
   },
-  connectionTimeout: 10000, // 10 seconds
+  connectionTimeout: 20000, // Increased to 20 seconds
+  greetingTimeout: 20000,
 });
-
 // 1. Get User Profile
 router.get("/:id", async (req, res) => {
   try {
@@ -131,50 +133,52 @@ router.post("/trigger-sos", async (req, res) => {
   }
 
   try {
-    // Fetch user and their emergency contacts
+    // 1. Database Lookup
     const user = await User.findById(userId);
 
     if (!user) {
+      console.error("SOS Error: User not found in DB");
       return res.status(404).json({ error: "User not found" });
     }
 
     if (!user.emergencyContacts || user.emergencyContacts.length === 0) {
       return res
         .status(400)
-        .json({ error: "User has no emergency contacts saved." });
+        .json({ error: "You have no emergency contacts saved." });
     }
 
-    // Map through the contacts to get all email addresses
     const recipientList = user.emergencyContacts.map((c) => c.email).join(", ");
 
+    // 2. Email Construction
     const mailOptions = {
       from: '"EmergenSeek SOS" <emergenseek000@gmail.com>',
       to: recipientList,
       subject: `🚨 EMERGENCY: SOS Alert from ${user.name}`,
-      text: `Emergency alert triggered! \n\nUser: ${user.name} \nPhone: ${user.phoneNumber} \nLocation: ${locationLink}`,
+      text: `Emergency alert! User: ${user.name} Location: ${locationLink}`,
       html: `
-        <div style="font-family: Arial, sans-serif; border: 2px solid red; padding: 20px; border-radius: 10px;">
-          <h2 style="color: red; text-align: center;">🚨 Emergency SOS Alert</h2>
-          <p>This is an automated emergency message from <strong>EmergenSeek</strong>.</p>
-          <hr />
+        <div style="font-family: sans-serif; border: 2px solid red; padding: 20px;">
+          <h2 style="color: red;">🚨 Emergency SOS Alert</h2>
           <p><strong>User:</strong> ${user.name}</p>
           <p><strong>Phone:</strong> ${user.phoneNumber || "Not provided"}</p>
-          <p><strong>Status:</strong> Triggered SOS Alert</p>
-          <p>The user is requesting help. You can view their current location by clicking the button below:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${locationLink}" style="background-color: red; color: white; padding: 15px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">View Location on Maps</a>
-          </div>
-          <p style="font-size: 12px; color: #555;">If the button doesn't work, copy and paste this link: ${locationLink}</p>
+          <p>The user has triggered an SOS. View location:</p>
+          <a href="${locationLink}" style="background: red; color: white; padding: 10px; text-decoration: none;">View on Google Maps</a>
         </div>
       `,
     };
 
+    // 3. Send and Log
+    console.log(`Attempting to send SOS for ${user.name} to: ${recipientList}`);
     await transporter.sendMail(mailOptions);
-    console.log(`SOS Email sent to: ${recipientList}`);
+
+    console.log("✅ SOS Email sent successfully");
     res.status(200).json({ message: "SOS Emails sent successfully!" });
   } catch (error) {
-    console.error("Nodemailer/Database Error:", error);
-    res.status(500).json({ error: "Failed to send SOS email." });
+    // Detailed logging for Render debugging
+    console.error("Detailed SOS Error Stack:", error);
+    res.status(500).json({
+      error: "Failed to send SOS email.",
+      details: error.code, // This helps the Flutter app show 'ETIMEDOUT' or 'EAUTH'
+    });
   }
 });
 
