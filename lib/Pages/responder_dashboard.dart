@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:emergenseek/Pages/responderMapPage.dart'; // Updated Import
 import 'package:emergenseek/services/socket_service.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:emergenseek/Pages/responderMapPage.dart';
 
 class ResponderDashboard extends StatefulWidget {
   const ResponderDashboard({super.key});
@@ -24,7 +25,6 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
     _listenForEmergencies();
   }
 
-  /// Clears user session and cleans up resources
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
@@ -34,13 +34,25 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
     Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
   }
 
-  /// Fetches users who currently have SOS active from the database
+  Future<void> _makePhoneCall(String phoneNumber) async {
+    final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
+    if (await canLaunchUrl(launchUri)) {
+      await launchUrl(launchUri);
+    } else {
+      debugPrint("Could not launch $launchUri");
+    }
+  }
+
   Future<void> _fetchInitialEmergencies() async {
     try {
       final response = await http.get(Uri.parse("$baseUrl/active-emergencies"));
 
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
+
+        // DEBUG: Check your console for this output
+        debugPrint("REST API DATA: $data");
+
         if (mounted) {
           setState(() {
             activeEmergencies = List<Map<String, dynamic>>.from(data);
@@ -58,36 +70,40 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
     try {
       final socketInstance = SocketService().socket;
 
-      // Handle NEW incoming emergency alerts
       socketInstance.on('new_emergency_alert', (data) {
+        // DEBUG: If 'phoneNumber' is missing here, the card will show N/A
+        debugPrint("SOCKET DATA RECEIVED: $data");
+
         if (mounted) {
           setState(() {
-            String newId = data['userId'] ?? data['_id'];
+            String newId = (data['userId'] ?? data['_id'] ?? 'unknown')
+                .toString();
             bool exists = activeEmergencies.any(
-              (e) => (e['userId'] ?? e['_id']) == newId,
+              (e) => (e['userId'] ?? e['_id'] ?? 'unknown').toString() == newId,
             );
 
             if (!exists) {
-              activeEmergencies.insert(0, data);
+              // Ensure we are adding the data exactly as the UI expects it
+              activeEmergencies.insert(0, Map<String, dynamic>.from(data));
             }
           });
         }
       });
 
-      // Remove emergencies when a user marks themselves as "Safe"
       socketInstance.on('status_changed', (data) {
         if (data['isSafe'] == true && mounted) {
           setState(() {
-            String safeId = data['userId'] ?? data['_id'];
+            String safeId = (data['userId'] ?? data['_id'] ?? 'unknown')
+                .toString();
             activeEmergencies.removeWhere(
-              (e) => (e['userId'] ?? e['_id']) == safeId,
+              (e) =>
+                  (e['userId'] ?? e['_id'] ?? 'unknown').toString() == safeId,
             );
           });
         }
       });
     } catch (e) {
-      // If socket isn't ready yet, retry shortly
-      debugPrint("Socket initializing... retrying listener: $e");
+      debugPrint("Socket initializing error: $e");
       Future.delayed(const Duration(seconds: 2), _listenForEmergencies);
     }
   }
@@ -132,10 +148,26 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
                 itemCount: activeEmergencies.length,
                 itemBuilder: (context, index) {
                   final alert = activeEmergencies[index];
+
                   final String victimId =
-                      alert['userId'] ?? alert['_id'] ?? 'unknown';
+                      (alert['userId'] ?? alert['_id'] ?? 'unknown').toString();
                   final String victimName =
-                      alert['userName'] ?? alert['name'] ?? 'Unknown User';
+                      (alert['userName'] ?? alert['name'] ?? 'Unknown User')
+                          .toString();
+
+                  // UNIVERSAL PHONE PICKER
+                  // This checks every possible place the number could be hiding
+                  String victimPhone = 'N/A';
+                  if (alert['phoneNumber'] != null &&
+                      alert['phoneNumber'].toString().isNotEmpty) {
+                    victimPhone = alert['phoneNumber'].toString();
+                  } else if (alert['phone'] != null &&
+                      alert['phone'].toString().isNotEmpty) {
+                    victimPhone = alert['phone'].toString();
+                  } else if (alert['user'] != null &&
+                      alert['user']['phoneNumber'] != null) {
+                    victimPhone = alert['user']['phoneNumber'].toString();
+                  }
 
                   return Card(
                     margin: const EdgeInsets.symmetric(
@@ -170,6 +202,30 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
                             "ID: $victimId",
                             style: const TextStyle(fontSize: 12),
                           ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.phone,
+                                size: 14,
+                                color: victimPhone == 'N/A'
+                                    ? Colors.grey
+                                    : Colors.green,
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                "Phone: $victimPhone",
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: victimPhone == 'N/A'
+                                      ? Colors.grey
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
                           const Text(
                             "SOS ACTIVE - NEEDS ASSISTANCE",
                             style: TextStyle(
@@ -180,9 +236,21 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
                           ),
                         ],
                       ),
-                      trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (victimPhone != 'N/A')
+                            IconButton(
+                              icon: const Icon(
+                                Icons.phone,
+                                color: Colors.green,
+                              ),
+                              onPressed: () => _makePhoneCall(victimPhone),
+                            ),
+                          const Icon(Icons.arrow_forward_ios, size: 16),
+                        ],
+                      ),
                       onTap: () {
-                        // NAVIGATE TO THE SPECIALIZED RESPONDER MAP
                         Navigator.push(
                           context,
                           MaterialPageRoute(
