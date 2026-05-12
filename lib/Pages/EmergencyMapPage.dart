@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -115,82 +116,71 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
   // --- SOS EMAIL LOGIC ---
   Future<void> _sendSOSAlert() async {
     if (currentPosition == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Wait for GPS location before sending SOS."),
-        ),
-      );
+      _showSnackBar("Wait for GPS location before sending SOS.", Colors.orange);
       return;
     }
 
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
+
     if (userId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("User ID not found. Please log in again."),
-        ),
-      );
+      _showSnackBar("User ID not found. Please log in again.", Colors.red);
       return;
     }
 
-    // Show a "Loading" snackbar so the user knows something is happening
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Sending SOS Alerts..."),
-        duration: Duration(seconds: 2),
-      ),
-    );
-
     try {
-      final String locationLink =
-          "https://www.google.com/maps/search/?api=1&query=${currentPosition!.latitude},${currentPosition!.longitude}";
-
-      final response = await http
-          .post(
-            Uri.parse("$baseUrl/user/trigger-sos"),
-            headers: {
-              "Content-Type": "application/json",
-              "Accept": "application/json",
-            },
-            body: jsonEncode({"userId": userId, "locationLink": locationLink}),
-          )
-          .timeout(const Duration(seconds: 15)); // Add a timeout
+      // 1. Fetch the user profile to get emergency contact phone numbers
+      final response = await http.get(Uri.parse("$baseUrl/user/$userId"));
 
       if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("SOS SUCCESS: Emails sent!"),
-            backgroundColor: Colors.green,
-          ),
+        final userData = jsonDecode(response.body);
+        final List contacts = userData['emergencyContacts'] ?? [];
+
+        if (contacts.isEmpty) {
+          _showSnackBar(
+            "No emergency contacts found. Please add them in profile.",
+            Colors.red,
+          );
+          return;
+        }
+
+        // 2. Extract phone numbers and join them with commas (or semicolons for iOS)
+        final String separator = Platform.isAndroid ? ',' : ';';
+        final String phoneNumbers = contacts
+            .map((c) => c['phone'])
+            .join(separator);
+
+        // 3. Create the SOS message
+        final String locationLink =
+            "https://www.google.com/maps/search/?api=1&query=${currentPosition!.latitude},${currentPosition!.longitude}";
+
+        final String message = Uri.encodeComponent(
+          "🚨 EMERGENCY SOS! I need help. My current location: $locationLink",
         );
+
+        // 4. Trigger the native SMS app
+        final Uri smsUri = Uri.parse("sms:$phoneNumbers?body=$message");
+
+        if (await canLaunchUrl(smsUri)) {
+          await launchUrl(smsUri);
+          _showSnackBar("SMS App Opened", Colors.green);
+        } else {
+          throw "Could not launch SMS app";
+        }
       } else {
-        // Server returned an error (like the 500 you are seeing)
-        final errorData = jsonDecode(response.body);
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              "SERVER ERROR: ${errorData['error'] ?? 'Unknown Error'}",
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
+        _showSnackBar("Failed to fetch contacts from server.", Colors.red);
       }
     } catch (e) {
-      // This catches network issues, timeouts, or DNS failures
-      debugPrint("SOS Fetch Error: $e");
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "NETWORK ERROR: Check your connection or server status.",
-          ),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      debugPrint("SOS SMS Error: $e");
+      _showSnackBar("Error triggering SOS: $e", Colors.red);
     }
+  }
+
+  // Helper for cleaner code
+  void _showSnackBar(String message, Color color) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
   }
 
   // --- STATUS TOGGLE (SAFE/HELP) ---
