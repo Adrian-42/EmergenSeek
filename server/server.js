@@ -5,6 +5,7 @@ const axios = require("axios");
 const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
+const nodemailer = require("nodemailer");
 
 // Route Imports
 const authRoutes = require("./routes/auth");
