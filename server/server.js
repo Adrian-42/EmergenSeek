@@ -25,9 +25,71 @@ const io = new Server(server, {
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: "emergenseek000@gmail.com", // Your Gmail address
-    pass: "sjyc aqal opec psjh", // Your Gmail App Password
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
   },
+});
+
+app.post("/trigger-sos", async (req, res) => {
+  const { userId, locationLink } = req.body;
+
+  try {
+    const user = await User.findById(userId);
+    if (
+      !user ||
+      !user.emergencyContacts ||
+      user.emergencyContacts.length === 0
+    ) {
+      return res.status(404).json({ error: "No contacts found" });
+    }
+
+    // 1. Prepare Phone Numbers for Fallback
+    const phoneNumbers = user.emergencyContacts
+      .map((c) => c.phone)
+      .filter((p) => p);
+
+    // 2. Prepare Emails
+    const recipientEmails = user.emergencyContacts
+      .map((c) => c.email)
+      .filter((email) => email)
+      .join(", ");
+
+    // Fallback if no emails are provided at all
+    if (!recipientEmails) {
+      return res.status(202).json({
+        message: "No emails provided. Falling back to SMS.",
+        fallbackToSms: true,
+        phoneNumbers: phoneNumbers,
+      });
+    }
+
+    const mailOptions = {
+      from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
+      to: recipientEmails,
+      subject: `🚨 EMERGENCY SOS - ${user.name} Needs Help!`,
+      html: `
+        <h2>Emergency Alert!</h2>
+        <p><b>${user.name}</b> is requesting immediate assistance.</p>
+        <p><b>Location:</b> <a href="${locationLink}">View on Google Maps</a></p>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    res.json({ message: "SOS Emails sent successfully!" });
+  } catch (err) {
+    console.error("SOS Email Error:", err);
+
+    // FETCH THE USER AGAIN TO GET PHONES IF THE TRY BLOCK FAILED LATE
+    const user = await User.findById(userId);
+    const phoneNumbers = user ? user.emergencyContacts.map((c) => c.phone) : [];
+
+    // Tell the app the email failed and provide the numbers for SMS
+    res.status(500).json({
+      error: "Email failed",
+      fallbackToSms: true,
+      phoneNumbers: phoneNumbers,
+    });
+  }
 });
 // Middleware
 app.use(

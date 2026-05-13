@@ -32,6 +32,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
 
   bool isSafe = true;
   bool _showDetails = false;
+  bool isSendingSOS = false; // Added to prevent double-tapping SOS
   List<dynamic> _nearbyPlaces = [];
   int _currentIndex = 0;
   String _currentType = '';
@@ -45,11 +46,10 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
   @override
   void initState() {
     super.initState();
-    _loadCachedPlaces(); // REQ010: Load stored data on startup
+    _loadCachedPlaces();
     _initLocationTracking();
   }
 
-  // REQ010: Retrieve last stored data from device memory
   Future<void> _loadCachedPlaces() async {
     final prefs = await SharedPreferences.getInstance();
     final String? cachedData = prefs.getString('cached_nearby_places');
@@ -89,10 +89,9 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
         await launchUrl(callUri);
       }
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Phone number not available for this facility."),
-        ),
+      _showSnackBar(
+        "Phone number not available for this facility.",
+        Colors.orange,
       );
     }
   }
@@ -113,74 +112,96 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     }
   }
 
-  // --- SOS EMAIL LOGIC ---
+  // --- SOS LOGIC WITH SMS FALLBACK ---
   Future<void> _sendSOSAlert() async {
-    if (currentPosition == null) {
-      _showSnackBar("Wait for GPS location before sending SOS.", Colors.orange);
-      return;
-    }
+    if (currentPosition == null || isSendingSOS) return;
+
+    setState(() => isSendingSOS = true);
+    _showSnackBar("🚨 Alerting Emergency Contacts...", Colors.red);
 
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('userId');
 
     if (userId == null) {
-      _showSnackBar("User ID not found. Please log in again.", Colors.red);
+      _showSnackBar("User ID not found.", Colors.red);
+      setState(() => isSendingSOS = false);
       return;
     }
 
+    final String googleMapsUrl =
+        "https://www.google.com/maps/search/?api=1&query=${currentPosition!.latitude},${currentPosition!.longitude}";
+
     try {
-      // 1. Fetch the user profile to get emergency contact phone numbers
-      final response = await http.get(Uri.parse("$baseUrl/user/$userId"));
+      // 1. Attempt to send via Nodemailer (Backend)
+      final response = await http
+          .post(
+            Uri.parse("$baseUrl/trigger-sos"),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({"userId": userId, "locationLink": googleMapsUrl}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final responseData = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
-        final userData = jsonDecode(response.body);
-        final List contacts = userData['emergencyContacts'] ?? [];
-
-        if (contacts.isEmpty) {
-          _showSnackBar(
-            "No emergency contacts found. Please add them in profile.",
-            Colors.red,
-          );
-          return;
-        }
-
-        // 2. Extract phone numbers and join them with commas (or semicolons for iOS)
-        final String separator = Platform.isAndroid ? ',' : ';';
-        final String phoneNumbers = contacts
-            .map((c) => c['phone'])
-            .join(separator);
-
-        // 3. Create the SOS message
-        final String locationLink =
-            "https://www.google.com/maps/search/?api=1&query=${currentPosition!.latitude},${currentPosition!.longitude}";
-
-        final String message = Uri.encodeComponent(
-          "🚨 EMERGENCY SOS! I need help. My current location: $locationLink",
-        );
-
-        // 4. Trigger the native SMS app
-        final Uri smsUri = Uri.parse("sms:$phoneNumbers?body=$message");
-
-        if (await canLaunchUrl(smsUri)) {
-          await launchUrl(smsUri);
-          _showSnackBar("SMS App Opened", Colors.green);
-        } else {
-          throw "Could not launch SMS app";
-        }
+        _showSnackBar("✅ SOS Emails Sent!", Colors.green);
+      } else if (responseData['fallbackToSms'] == true) {
+        // Backend explicitly asked for SMS fallback
+        _triggerDirectSMS(responseData['phoneNumbers'], googleMapsUrl);
       } else {
-        _showSnackBar("Failed to fetch contacts from server.", Colors.red);
+        throw Exception("Server side error");
       }
     } catch (e) {
-      debugPrint("SOS SMS Error: $e");
-      _showSnackBar("Error triggering SOS: $e", Colors.red);
+      // 2. Catch Timeout/Network error and trigger SMS fallback manually
+      debugPrint("Email SOS failed, attempting SMS fallback: $e");
+
+      // Fetch numbers locally from the user profile since the SOS route timed out
+      final userRes = await http.get(Uri.parse("$baseUrl/user/$userId"));
+      if (userRes.statusCode == 200) {
+        final userData = jsonDecode(userRes.body);
+        final List contacts = userData['emergencyContacts'] ?? [];
+        final List<String> phones = contacts
+            .map((c) => c['phone'].toString())
+            .toList();
+
+        if (phones.isNotEmpty) {
+          _triggerDirectSMS(phones, googleMapsUrl);
+        } else {
+          _showSnackBar("❌ SOS Failed. No phone numbers found.", Colors.red);
+        }
+      }
+    } finally {
+      // Prevent rapid spamming of the SOS button
+      Future.delayed(const Duration(seconds: 10), () {
+        if (mounted) setState(() => isSendingSOS = false);
+      });
     }
   }
 
-  // Helper for cleaner code
+  // Helper to launch the native SMS app
+  Future<void> _triggerDirectSMS(List phoneNumbers, String locationLink) async {
+    final String separator = Platform.isAndroid ? ',' : ';';
+    final String recipients = phoneNumbers.join(separator);
+    final String message = Uri.encodeComponent(
+      "🚨 EMERGENCY SOS! I need help. My current location: $locationLink",
+    );
+
+    final Uri smsUri = Uri.parse("sms:$recipients?body=$message");
+
+    if (await canLaunchUrl(smsUri)) {
+      await launchUrl(smsUri);
+      _showSnackBar("⚠️ Email failed. SMS App Opened.", Colors.orange);
+    } else {
+      _showSnackBar("Could not launch SMS app.", Colors.red);
+    }
+  }
+
   void _showSnackBar(String message, Color color) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
+    }
   }
 
   // --- STATUS TOGGLE (SAFE/HELP) ---
@@ -315,9 +336,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           polylines.clear();
           polylines.add(
             Polyline(
-              polylineId: const PolylineId(
-                "road_route",
-              ), // Fixed: Used PolylineId instead of PolygonId
+              polylineId: const PolylineId("road_route"),
               points: polylineCoordinates,
               color: Colors.blueAccent,
               width: 6,
@@ -386,14 +405,12 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           _currentType = type;
         });
 
-        // REQ010: Save to persistent storage upon successful fetch
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('cached_nearby_places', jsonEncode(results));
-
         _showCurrentFacility();
       }
     } catch (e) {
-      debugPrint("Fetch Error: $e. Using cached data if available.");
+      debugPrint("Fetch Error: $e. Using cached data.");
     }
   }
 
@@ -497,7 +514,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
             left: 20,
             top: 450,
             child: FloatingActionButton(
-              heroTag: "sos_email",
+              heroTag: "sos_alert",
               backgroundColor: Colors.red,
               onPressed: _sendSOSAlert,
               child: const Text(
