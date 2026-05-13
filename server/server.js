@@ -6,14 +6,31 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
 const nodemailer = require("nodemailer");
+const User = require("./models/User");
 
 // Route Imports
 const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/userRoutes");
-const User = require("./models/User");
 
 const app = express();
 const server = http.createServer(app);
+
+// --- MIDDLEWARE (MUST BE BEFORE ROUTES) ---
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Accept",
+      "X-Requested-With",
+    ],
+    credentials: true,
+  }),
+);
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Initialize Socket.io
 const io = new Server(server, {
@@ -22,6 +39,7 @@ const io = new Server(server, {
     methods: ["GET", "POST", "PUT", "DELETE"],
   },
 });
+
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -30,6 +48,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// --- SOS ROUTE ---
 app.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
 
@@ -91,21 +110,6 @@ app.post("/trigger-sos", async (req, res) => {
     });
   }
 });
-// Middleware
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Accept",
-      "X-Requested-With",
-    ],
-    credentials: true,
-  }),
-);
-app.use(express.json());
 
 // Pass 'io' to the request object so routes can use it
 app.set("socketio", io);
@@ -115,7 +119,7 @@ const MONGO_URI = process.env.MONGO_URI;
 
 // --- ROUTES ---
 app.use("/", authRoutes);
-app.use("/user", userRoutes); // All user-related endpoints now prefixed with /user
+app.use("/user", userRoutes);
 
 // --- SHARED UTILITY ROUTES (Maps/Places) ---
 app.get("/places", async (req, res) => {
