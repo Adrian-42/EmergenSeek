@@ -50,7 +50,6 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
 
-        // DEBUG: Check your console for this output
         debugPrint("REST API DATA: $data");
 
         if (mounted) {
@@ -71,7 +70,6 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
       final socketInstance = SocketService().socket;
 
       socketInstance.on('new_emergency_alert', (data) {
-        // DEBUG: If 'phoneNumber' is missing here, the card will show N/A
         debugPrint("SOCKET DATA RECEIVED: $data");
 
         if (mounted) {
@@ -83,7 +81,6 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
             );
 
             if (!exists) {
-              // Ensure we are adding the data exactly as the UI expects it
               activeEmergencies.insert(0, Map<String, dynamic>.from(data));
             }
           });
@@ -155,8 +152,6 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
                       (alert['userName'] ?? alert['name'] ?? 'Unknown User')
                           .toString();
 
-                  // UNIVERSAL PHONE PICKER
-                  // This checks every possible place the number could be hiding
                   String victimPhone = 'N/A';
                   if (alert['phoneNumber'] != null &&
                       alert['phoneNumber'].toString().isNotEmpty) {
@@ -251,6 +246,7 @@ class _ResponderDashboardState extends State<ResponderDashboard> {
                         ],
                       ),
                       onTap: () {
+                        // FIX: Navigating to ResponderMapPage with the ID
                         Navigator.push(
                           context,
                           MaterialPageRoute(

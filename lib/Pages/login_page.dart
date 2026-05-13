@@ -21,6 +21,7 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController passwordController = TextEditingController();
 
   bool isLoading = false;
+  bool _isObscured = true;
   final String baseUrl = "https://emergenseek.onrender.com";
 
   @override
@@ -140,14 +141,26 @@ class _LoginPageState extends State<LoginPage> {
 
                   TextFormField(
                     controller: passwordController,
-                    obscureText: true,
+                    // Use the variable to toggle visibility
+                    obscureText: _isObscured,
                     validator: (value) => (value == null || value.length < 6)
                         ? "Password must be at least 6 characters"
                         : null,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: "Password",
-                      prefixIcon: Icon(Icons.lock),
-                      border: OutlineInputBorder(),
+                      prefixIcon: const Icon(Icons.lock),
+                      // Added suffixIcon for the eye toggle
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _isObscured ? Icons.visibility_off : Icons.visibility,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _isObscured = !_isObscured;
+                          });
+                        },
+                      ),
+                      border: const OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 30),

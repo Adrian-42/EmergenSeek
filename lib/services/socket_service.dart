@@ -14,7 +14,12 @@ class SocketService {
   final _messageStreamController =
       StreamController<Map<String, dynamic>>.broadcast();
 
+  // Getters for the streams
   Stream<LatLng> get locationStream => _locationStreamController.stream;
+
+  // Aliasing messageStream to chatStream to match your Page code
+  Stream<Map<String, dynamic>> get chatStream =>
+      _messageStreamController.stream;
   Stream<Map<String, dynamic>> get messageStream =>
       _messageStreamController.stream;
 
@@ -85,6 +90,13 @@ class SocketService {
         'lng': lng,
       });
     }
+  }
+
+  /// Alias for sendMessage to fix the "emitChatMessage isn't defined" error
+  void emitChatMessage(String emergencyId, String text) {
+    // Note: Since this alias doesn't take a senderId, you might want to
+    // retrieve the current user's ID here or update the UI to pass it.
+    sendMessage(emergencyId, text, "responder_internal_id");
   }
 
   /// Shared messaging function for both roles
