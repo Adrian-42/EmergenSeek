@@ -50,13 +50,16 @@ const transporter = nodemailer.createTransport({
 });
 
 // --- NEW: CHAT HISTORY ENDPOINT ---
-app.get("/chat-history/:emergencyId", async (req, res) => {
+app.get("/emergency/chat/:emergencyId", async (req, res) => {
   try {
     const messages = await Message.find({ emergencyId: req.params.emergencyId })
-      .sort({ timestamp: -1 }) // Get newest first for the Flutter ListView
+      .sort({ timestamp: -1 }) // Get newest 50
       .limit(50);
-    res.json(messages);
+
+    // Reverse them so the oldest is at index 0 (top of the list)
+    res.json(messages.reverse());
   } catch (err) {
+    console.error("Chat History Error:", err);
     res.status(500).json({ error: "Failed to fetch chat history" });
   }
 });

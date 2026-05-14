@@ -34,26 +34,30 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   final TextEditingController _chatController = TextEditingController();
   List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
-  bool _isChatExpanded = false; // Toggle for the dropdown animation
+  bool _isChatExpanded = false;
 
   double _currentZoom = 17.0;
   LatLng? _lastStart;
   LatLng? _lastNext;
   double? _lastBearing;
-  String _myResponderId =
-      "ACTUAL_LOGGED_IN_ID"; // Replace with your actual user ID logic
+
+  // Ensure this ID matches your backend's expected Responder ID
+  final String _myResponderId = "ACTUAL_LOGGED_IN_ID";
 
   final String baseUrl = "https://emergenseek.onrender.com";
 
   @override
   void initState() {
     super.initState();
-    _fetchVictimDetails();
-    _loadChatHistory(); // Load existing messages first
+    _initializeData();
+  }
+
+  Future<void> _initializeData() async {
+    // Run these in parallel to speed up page load
+    await Future.wait([_fetchVictimDetails(), _loadChatHistory()]);
     _setupTrackingAndChat();
   }
 
-  // --- NEW: Load Chat History from Server ---
   Future<void> _loadChatHistory() async {
     try {
       final response = await http.get(
@@ -61,16 +65,20 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
       );
       if (response.statusCode == 200) {
         final List<dynamic> history = jsonDecode(response.body);
-        setState(() {
-          _messages = history
-              .map(
-                (m) => {
-                  "text": m['message'] ?? m['text'],
-                  "isMe": m['senderId'] == _myResponderId,
-                },
-              )
-              .toList();
-        });
+        if (mounted) {
+          setState(() {
+            _messages = history
+                .map(
+                  (m) => {
+                    "text": m['message'] ?? m['text'],
+                    "isMe": m['senderId'] == _myResponderId,
+                    "id":
+                        m['_id'], // Track ID to prevent duplicates if necessary
+                  },
+                )
+                .toList();
+          });
+        }
       }
     } catch (e) {
       debugPrint("Error loading chat history: $e");
@@ -84,16 +92,18 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
       );
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        setState(() {
-          _victimPhoneNumber = data['phoneNumber'] ?? data['phone'];
-          _victimName = data['fullName'] ?? data['name'] ?? "Victim";
-          _victimAddress = data['address'] ?? "No specific address provided";
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _victimPhoneNumber = data['phoneNumber'] ?? data['phone'];
+            _victimName = data['fullName'] ?? data['name'] ?? "Victim";
+            _victimAddress = data['address'] ?? "No specific address provided";
+            _isLoading = false;
+          });
+        }
       }
     } catch (e) {
       debugPrint("Error fetching victim details: $e");
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -107,16 +117,19 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     });
 
     _chatSubscription = SocketService().chatStream.listen((data) {
-      // Check if message belongs to this emergency and is not already in list
-      if (mounted && data['emergencyId'] == widget.activeEmergencyId) {
+      if (!mounted) return;
+
+      // FIX: Only add to list if the message is from the OTHER person.
+      // Your own messages are added instantly in _sendMessage to keep the UI snappy.
+      if (data['emergencyId'] == widget.activeEmergencyId &&
+          data['senderId'] != _myResponderId) {
         setState(() {
           _messages.add({
             "text": data['text'] ?? data['message'],
-            "isMe": data['senderId'] == _myResponderId,
+            "isMe": false,
           });
 
-          // Optional: Auto-expand chat or show notification if collapsed
-          if (!_isChatExpanded && data['senderId'] != _myResponderId) {
+          if (!_isChatExpanded) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text("New message from $_victimName"),
@@ -133,61 +146,23 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     });
   }
 
-  Future<void> _makeDirectCall() async {
-    if (_victimPhoneNumber == null || _victimPhoneNumber!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Phone number not available")),
-      );
-      return;
-    }
-    final Uri launchUri = Uri(scheme: 'tel', path: _victimPhoneNumber);
-    if (await canLaunchUrl(launchUri)) {
-      await launchUrl(launchUri);
-    }
-  }
-
-  void _recenterOnVictim() {
-    if (_lastKnownVictimPos != null && _controller != null) {
-      _controller!.animateCamera(
-        CameraUpdate.newLatLngZoom(_lastKnownVictimPos!, 18),
-      );
-    }
-  }
-
-  Future<void> _markAsArrived() async {
-    try {
-      final response = await http.patch(
-        Uri.parse("$baseUrl/emergency/status/${widget.activeEmergencyId}"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"status": "arrived"}),
-      );
-
-      if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: Colors.green,
-            content: Text("Arrival Confirmed"),
-          ),
-        );
-      }
-    } catch (e) {
-      debugPrint("Error marking arrival: $e");
-    }
-  }
-
   void _sendMessage() {
     if (_chatController.text.trim().isEmpty) return;
 
     final msg = _chatController.text.trim();
+
+    // 1. Send to Socket
     SocketService().sendMessage(widget.activeEmergencyId, msg, _myResponderId);
 
+    // 2. Update UI locally (This is your "isMe" message)
     setState(() {
       _messages.add({"text": msg, "isMe": true});
       _chatController.clear();
     });
   }
 
-  // --- DYNAMIC ARROW & ROUTING LOGIC (RETAINED) ---
+  // --- MAP & NAVIGATION LOGIC (RETAINED) ---
+
   double _calculateDynamicSize(double zoom) {
     if (zoom >= 18) return 0.0001;
     if (zoom >= 17) return 0.0002;
@@ -279,6 +254,37 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     }
   }
 
+  Future<void> _makeDirectCall() async {
+    if (_victimPhoneNumber == null || _victimPhoneNumber!.isEmpty) return;
+    final Uri launchUri = Uri(scheme: 'tel', path: _victimPhoneNumber);
+    if (await canLaunchUrl(launchUri)) await launchUrl(launchUri);
+  }
+
+  void _recenterOnVictim() {
+    if (_lastKnownVictimPos != null && _controller != null) {
+      _controller!.animateCamera(
+        CameraUpdate.newLatLngZoom(_lastKnownVictimPos!, 18),
+      );
+    }
+  }
+
+  Future<void> _markAsArrived() async {
+    try {
+      final response = await http.patch(
+        Uri.parse("$baseUrl/emergency/status/${widget.activeEmergencyId}"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"status": "arrived"}),
+      );
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("Arrival Confirmed")));
+      }
+    } catch (e) {
+      debugPrint("Error marking arrival: $e");
+    }
+  }
+
   @override
   void dispose() {
     _locationSubscription?.cancel();
@@ -324,7 +330,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
                 myLocationEnabled: true,
               ),
 
-              // --- INTEGRATED INFO & CHAT CARD ---
+              // UI Card for Info and Chat
               Positioned(
                 top: 20,
                 left: 15,
@@ -442,7 +448,6 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
                           ),
                         ),
 
-                        // REVEALED CHAT SECTION
                         if (_isChatExpanded) ...[
                           const Divider(height: 1),
                           SizedBox(
@@ -499,7 +504,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
                 ),
               ),
 
-              // Bottom Control Buttons
+              // Control Buttons
               Positioned(
                 bottom: 30,
                 left: 20,
@@ -511,7 +516,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
                       child: FloatingActionButton(
                         onPressed: _makeDirectCall,
                         backgroundColor: Colors.green,
-                        heroTag: "call_fab",
+                        heroTag: "call_fab_unique",
                         child: const Icon(Icons.phone),
                       ),
                     ),
@@ -553,13 +558,13 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
         if (_isLoading)
           Container(
             color: Colors.black54,
-            child: Center(
+            child: const Center(
               child: Card(
                 child: Padding(
-                  padding: const EdgeInsets.all(25.0),
+                  padding: EdgeInsets.all(25.0),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
-                    children: const [
+                    children: [
                       CircularProgressIndicator(color: Colors.redAccent),
                       SizedBox(height: 20),
                       Text(
@@ -577,7 +582,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   }
 
   Widget _buildBubble(Map msg) {
-    bool isMe = msg['isMe'];
+    bool isMe = msg['isMe'] ?? false;
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -591,7 +596,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
           ),
         ),
         child: Text(
-          msg['text'],
+          msg['text'] ?? "",
           style: TextStyle(
             color: isMe ? Colors.white : Colors.black87,
             fontSize: 13,
