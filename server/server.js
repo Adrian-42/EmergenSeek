@@ -237,20 +237,25 @@ io.on("connection", (socket) => {
       senderId: data.senderId,
       receiverId: data.receiverId,
       text: data.text,
-      senderName: data.senderName, // Ensure you pass this from Flutter for the notification
+      senderName: data.senderName,
       timestamp: new Date(),
     };
+
     try {
       const newMessage = new Message(messagePayload);
       await newMessage.save();
 
-      // Emit to the specific room for the ChatPage
+      // Emit to the specific room (ChatPage)
       io.to(data.roomId).emit("message_received", messagePayload);
 
-      // Emit to the receiver's private ID for the MapPage notification
-      io.emit("new_notification_${data.receiverId}", messagePayload);
+      // FIX: Use backticks (`) for template literals so the ID is injected correctly
+      io.emit(`new_notification_${data.receiverId}`, messagePayload);
+
+      console.log(
+        `✅ Message routed from ${data.senderId} to ${data.receiverId}`,
+      );
     } catch (e) {
-      console.error("Error saving private message:", e);
+      console.error("❌ Error saving private message:", e);
     }
   });
 

@@ -108,6 +108,14 @@ class SocketService {
     sendMessage(emergencyId, text, "responder_internal_id");
   }
 
+  void sendPrivateMessage(Map<String, dynamic> payload) {
+    if (_socket?.connected ?? false) {
+      print("📤 Sending Private Message: ${payload['text']}");
+      // This must match the backend .on("send_private_message")
+      _socket!.emit('send_private_message', payload);
+    }
+  }
+
   /// Shared messaging function for both roles
   void sendMessage(String emergencyId, String text, String senderId) {
     if (_socket?.connected ?? false) {

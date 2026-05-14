@@ -118,17 +118,18 @@ class _ChatPageState extends State<ChatPage> {
     });
 
     final payload = {
-      "roomId": roomId,
-      "emergencyId": widget.emergencyId, // Added for backend consistency
+      "roomId": roomId, // The emergencyId
+      "emergencyId": widget.emergencyId,
       "senderId": widget.currentUserId,
       "senderName": _currentUserName,
       "receiverId": widget.otherUserId,
       "text": text,
-      "message": text, // Some emergency endpoints expect 'message'
+      "message": text,
       "timestamp": now,
     };
 
-    SocketService().socket.emit("send_private_message", payload);
+    // FIX: Use the specific private message emitter
+    SocketService().sendPrivateMessage(payload);
     _messageController.clear();
   }
 
