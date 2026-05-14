@@ -111,7 +111,16 @@ app.get("/emergency/responders/:emergencyId", async (req, res) => {
     });
   }
 });
-
+const formatPHNumber = (phone) => {
+  let cleaned = phone.replace(/\D/g, ""); // Remove non-digits
+  if (cleaned.startsWith("09") && cleaned.length === 11) {
+    return `+63${cleaned.substring(1)}`;
+  }
+  if (cleaned.startsWith("63") && cleaned.length === 12) {
+    return `+${cleaned}`;
+  }
+  return cleaned.startsWith("+") ? cleaned : `+${cleaned}`;
+};
 // SOS Trigger
 app.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
@@ -124,38 +133,47 @@ app.post("/trigger-sos", async (req, res) => {
     ) {
       return res.status(404).json({ error: "No contacts found" });
     }
+
+    // Format all phone numbers to +63 standard
     const phoneNumbers = user.emergencyContacts
       .map((c) => c.phone)
-      .filter((p) => p);
+      .filter((p) => p)
+      .map((p) => formatPHNumber(p));
+
     const recipientEmails = user.emergencyContacts
       .map((c) => c.email)
       .filter((email) => email)
       .join(", ");
 
-    if (!recipientEmails) {
-      return res.status(202).json({
-        message: "No emails provided. Falling back to SMS.",
-        fallbackToSms: true,
-        phoneNumbers: phoneNumbers,
-      });
+    // 1. Attempt Email
+    if (recipientEmails) {
+      const mailOptions = {
+        from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
+        to: recipientEmails,
+        subject: `🚨 EMERGENCY SOS - ${user.name} Needs Help!`,
+        html: `<h2>Emergency Alert!</h2>
+               <p><b>${user.name}</b> is requesting immediate assistance.</p>
+               <p><b>Location:</b> <a href="${locationLink}">View on Google Maps</a></p>`,
+      };
+      await transporter.sendMail(mailOptions);
     }
 
-    const mailOptions = {
-      from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
-      to: recipientEmails,
-      subject: `🚨 EMERGENCY SOS - ${user.name} Needs Help!`,
-      html: `<h2>Emergency Alert!</h2><p><b>${user.name}</b> is requesting immediate assistance.</p><p><b>Location:</b> <a href="${locationLink}">View on Google Maps</a></p>`,
-    };
-    await transporter.sendMail(mailOptions);
-    res.json({ message: "SOS Emails sent successfully!" });
+    // 2. Return success with formatted numbers for the Frontend to trigger SMS
+    res.json({
+      message: "SOS Processed",
+      emailSent: !!recipientEmails,
+      phoneNumbers: phoneNumbers, // These are now +63xxxxxxxxx
+    });
   } catch (err) {
-    console.error("SOS Email Error:", err);
+    console.error("SOS Error:", err);
     const user = await User.findById(userId);
-    const phoneNumbers = user ? user.emergencyContacts.map((c) => c.phone) : [];
+    const phones = user
+      ? user.emergencyContacts.map((c) => formatPHNumber(c.phone))
+      : [];
     res.status(500).json({
-      error: "Email failed",
+      error: "Process failed",
       fallbackToSms: true,
-      phoneNumbers: phoneNumbers,
+      phoneNumbers: phones,
     });
   }
 });
@@ -244,6 +262,7 @@ io.on("connection", (socket) => {
 
     try {
       const newMessage = new Message(messagePayload);
+      sendFCMNotification(receiverId, messagePayload.text);
       await newMessage.save(); // This persists it to MongoDB
 
       // Emit to the specific room

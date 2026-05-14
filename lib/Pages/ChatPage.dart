@@ -36,7 +36,11 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
-    roomId = widget.emergencyId;
+
+    List<String> ids = [widget.currentUserId, widget.otherUserId];
+    ids.sort();
+    roomId = ids.join("_");
+
     _initializeChat();
   }
 
@@ -44,11 +48,10 @@ class _ChatPageState extends State<ChatPage> {
     final prefs = await SharedPreferences.getInstance();
     _currentUserName = prefs.getString('userName') ?? "Resident";
 
-    // Ensure socket is initialized and connected
     SocketService().initSocket(widget.currentUserId);
 
-    // Give it a tiny delay to ensure connection before joining room
     Future.delayed(const Duration(milliseconds: 500), () {
+      // USE THE PRIVATE JOIN EVENT
       SocketService().socket.emit("join_private_chat", roomId);
     });
 
@@ -56,24 +59,20 @@ class _ChatPageState extends State<ChatPage> {
 
     SocketService().chatStream.listen((data) {
       if (mounted) {
-        // Broaden the check to catch either roomId or emergencyId from backend
-        if (data['roomId'] == roomId || data['emergencyId'] == roomId) {
+        // Now checking against our unique pair roomId
+        if (data['roomId'] == roomId) {
           final incomingSenderId = data['senderId'] is Map
               ? data['senderId']['_id'].toString()
               : data['senderId'].toString();
 
           setState(() {
             bool isMe = incomingSenderId == widget.currentUserId.toString();
-
-            // Only add if it's from the OTHER person to avoid local duplicates
             if (!isMe) {
               _messages.insert(0, {
                 "text": data['text'] ?? data['message'] ?? "",
                 "isMe": false,
                 "timestamp":
-                    data['timestamp'] ??
-                    data['createdAt'] ??
-                    DateTime.now().toIso8601String(),
+                    data['timestamp'] ?? DateTime.now().toIso8601String(),
               });
             }
           });
@@ -83,7 +82,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _loadChatHistory() async {
-    final url = "$baseUrl/emergency/chat/${widget.emergencyId}";
+    final url = "$baseUrl/chat-history/$roomId";
     try {
       final response = await http
           .get(Uri.parse(url))
@@ -133,16 +132,17 @@ class _ChatPageState extends State<ChatPage> {
     });
 
     final payload = {
-      "emergencyId": widget.emergencyId, // Primary ID
+      "roomId": roomId,
+      "emergencyId": widget.emergencyId,
       "senderId": widget.currentUserId,
-      "text": text, // Responder listens for 'text'
-      "message": text, // Fallback for some schemas
+      "receiverId": widget.otherUserId,
+      "text": text,
+      "senderName": _currentUserName,
       "timestamp": now,
     };
 
     if (SocketService().socket.connected) {
-      // Standardize this event name in your SocketService
-      SocketService().socket.emit("send_message", payload);
+      SocketService().socket.emit("send_private_message", payload);
     }
     _messageController.clear();
   }

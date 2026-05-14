@@ -77,26 +77,52 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   }
 
   Future<void> _loadChatHistory() async {
+    if (_myResponderId == null) return;
+
+    // 1. Generate the same unique Room ID
+    List<String> ids = [_myResponderId!, widget.activeEmergencyId];
+    ids.sort();
+    String privateRoomId = ids.join("_");
+
+    // 2. Use the private history endpoint (Verify this exists on your Express backend)
+    // If you haven't made /chat-history/:roomId, use /emergency/chat/${widget.activeEmergencyId}
+    // but we must filter it carefully.
     try {
       final response = await http.get(
         Uri.parse("$baseUrl/emergency/chat/${widget.activeEmergencyId}"),
       );
+
       if (response.statusCode == 200) {
         final List<dynamic> history = jsonDecode(response.body);
         if (mounted) {
           setState(() {
-            _messages = history.map((m) {
-              final sender = m['senderId'] is Map
-                  ? m['senderId']['_id']
-                  : m['senderId'];
+            // Filter history to ONLY show messages between THIS responder and THIS victim
+            _messages = history
+                .where((m) {
+                  final sender = m['senderId'] is Map
+                      ? m['senderId']['_id']
+                      : m['senderId'];
+                  final receiver = m['receiverId'];
 
-              return {
-                "text": m['message'] ?? m['text'] ?? "",
-                "isMe": sender == _myResponderId,
-                "id": m['_id'],
-              };
-            }).toList();
+                  // Logic: Is this message part of our private conversation?
+                  return (sender == _myResponderId &&
+                          receiver == widget.activeEmergencyId) ||
+                      (sender == widget.activeEmergencyId &&
+                          receiver == _myResponderId);
+                })
+                .map((m) {
+                  final sender = m['senderId'] is Map
+                      ? m['senderId']['_id']
+                      : m['senderId'];
+                  return {
+                    "text": m['message'] ?? m['text'] ?? "",
+                    "isMe": sender.toString() == _myResponderId.toString(),
+                    "id": m['_id'],
+                  };
+                })
+                .toList();
           });
+          _scrollToBottom();
         }
       }
     } catch (e) {
@@ -129,6 +155,15 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   void _setupTrackingAndChat() {
     SocketService().startEmergencyStreaming(widget.activeEmergencyId);
 
+    // 1. Create the same sorted Room ID
+    // widget.activeEmergencyId is the victim's ID
+    List<String> ids = [_myResponderId!, widget.activeEmergencyId];
+    ids.sort();
+    String privateRoomId = ids.join("_");
+
+    // 2. Join the private room
+    SocketService().socket.emit("join_private_chat", privateRoomId);
+
     _locationSubscription = SocketService().locationStream.listen((LatLng pos) {
       if (!mounted) return;
       _lastKnownVictimPos = pos;
@@ -138,14 +173,12 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     _chatSubscription = SocketService().chatStream.listen((data) {
       if (!mounted) return;
 
-      // 1. Extract Sender ID correctly (handle Map or String)
-      final incomingSenderId = data['senderId'] is Map
-          ? data['senderId']['_id'].toString()
-          : data['senderId'].toString();
+      // 3. Only accept messages belonging to THIS specific private room
+      if (data['roomId'] == privateRoomId) {
+        final incomingSenderId = data['senderId'] is Map
+            ? data['senderId']['_id'].toString()
+            : data['senderId'].toString();
 
-      // 2. Match the Emergency ID
-      if (data['emergencyId'] == widget.activeEmergencyId) {
-        // 3. Prevent duplicate UI entries from self
         if (incomingSenderId != _myResponderId.toString()) {
           setState(() {
             _messages.add({
@@ -164,16 +197,21 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
 
     final msg = _chatController.text.trim();
 
-    // Create a payload identical in structure to the Resident side
+    List<String> ids = [_myResponderId!, widget.activeEmergencyId];
+    ids.sort();
+    String privateRoomId = ids.join("_");
+
     final payload = {
+      "roomId": privateRoomId,
       "emergencyId": widget.activeEmergencyId,
       "senderId": _myResponderId,
+      "receiverId": widget.activeEmergencyId, // The victim
       "text": msg,
       "timestamp": DateTime.now().toIso8601String(),
     };
 
-    // Use the exact same socket emit event as the Resident side
-    SocketService().socket.emit("send_message", payload);
+    // Switch to send_private_message
+    SocketService().socket.emit("send_private_message", payload);
 
     setState(() {
       _messages.add({"text": msg, "isMe": true});

@@ -202,18 +202,11 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     }
   }
 
-  // --- SOS LOGIC WITH SMS FALLBACK ---
   Future<void> _sendSOSAlert() async {
     if (currentPosition == null || isSendingSOS) return;
 
     setState(() => isSendingSOS = true);
-    _showSnackBar("🚨 Alerting Emergency Contacts...", Colors.red);
-
-    if (_currentUserId == null) {
-      _showSnackBar("User ID not found.", Colors.red);
-      setState(() => isSendingSOS = false);
-      return;
-    }
+    _showSnackBar("🚨 Sending SOS Alerts...", Colors.red);
 
     final String googleMapsUrl =
         "https://www.google.com/maps/search/?api=1&query=${currentPosition!.latitude},${currentPosition!.longitude}";
@@ -228,57 +221,72 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
               "locationLink": googleMapsUrl,
             }),
           )
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 10));
 
-      final responseData = jsonDecode(response.body);
+      if (response.statusCode == 200 || response.statusCode == 500) {
+        final data = jsonDecode(response.body);
+        final List<dynamic> rawPhones = data['phoneNumbers'] ?? [];
 
-      if (response.statusCode == 200) {
-        _showSnackBar("✅ SOS Emails Sent!", Colors.green);
-      } else if (responseData['fallbackToSms'] == true) {
-        _triggerDirectSMS(responseData['phoneNumbers'], googleMapsUrl);
-      } else {
-        throw Exception("Server side error");
-      }
-    } catch (e) {
-      debugPrint("Email SOS failed, attempting SMS fallback: $e");
+        // Final format check before triggering SMS
+        List<String> formattedPhones = rawPhones.map((p) {
+          String phone = p.toString().replaceAll(RegExp(r'\D'), '');
+          if (phone.startsWith('09')) {
+            return "+63${phone.substring(1)}";
+          } else if (phone.startsWith('63')) {
+            return "+$phone";
+          }
+          return "+$phone";
+        }).toList();
 
-      final userRes = await http.get(
-        Uri.parse("$baseUrl/user/$_currentUserId"),
-      );
-      if (userRes.statusCode == 200) {
-        final userData = jsonDecode(userRes.body);
-        final List contacts = userData['emergencyContacts'] ?? [];
-        final List<String> phones = contacts
-            .map((c) => c['phone'].toString())
-            .toList();
-
-        if (phones.isNotEmpty) {
-          _triggerDirectSMS(phones, googleMapsUrl);
-        } else {
-          _showSnackBar("❌ SOS Failed. No phone numbers found.", Colors.red);
+        if (formattedPhones.isNotEmpty) {
+          // This calls your SMS gateway or direct SMS plugin
+          await _triggerDirectSMS(
+            formattedPhones,
+            "EMERGENCY: I need help! My location: $googleMapsUrl",
+          );
+          _showSnackBar("✅ SOS SMS Sent!", Colors.green);
         }
       }
+    } catch (e) {
+      debugPrint("SOS Error: $e");
+      _showSnackBar("❌ SOS Failed. Check connection.", Colors.red);
     } finally {
-      Future.delayed(const Duration(seconds: 10), () {
+      Future.delayed(const Duration(seconds: 5), () {
         if (mounted) setState(() => isSendingSOS = false);
       });
     }
   }
 
-  Future<void> _triggerDirectSMS(List phoneNumbers, String locationLink) async {
-    final String separator = Platform.isAndroid ? ',' : ';';
+  Future<void> _triggerDirectSMS(
+    List<String> phoneNumbers,
+    String locationLink,
+  ) async {
+    // Use ';' for iOS and ',' for Android for multiple recipients
+    final String separator = Platform.isIOS ? ';' : ',';
     final String recipients = phoneNumbers.join(separator);
-    final String message = Uri.encodeComponent(
-      "🚨 EMERGENCY SOS! I need help. My current location: $locationLink",
+
+    final String message =
+        "🚨 EMERGENCY SOS! I need help. My location: $locationLink";
+
+    // Use Uri class for proper encoding instead of manual string concatenation
+    final Uri smsUri = Uri(
+      scheme: 'sms',
+      path: recipients,
+      queryParameters: <String, String>{'body': message},
     );
 
-    final Uri smsUri = Uri.parse("sms:$recipients?body=$message");
-
-    if (await canLaunchUrl(smsUri)) {
-      await launchUrl(smsUri);
-      _showSnackBar("⚠️ Email failed. SMS App Opened.", Colors.orange);
-    } else {
-      _showSnackBar("Could not launch SMS app.", Colors.red);
+    try {
+      // LaunchMode.externalApplication is critical for reliability on newer Android versions
+      if (await canLaunchUrl(smsUri)) {
+        await launchUrl(smsUri, mode: LaunchMode.externalApplication);
+      } else {
+        // Fallback: Try launching without 'canLaunchUrl' check, as it occasionally
+        // returns false on some devices even when the app is available.
+        await launchUrl(smsUri, mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      debugPrint("SMS Launch Error: $e");
+      _showSnackBar("Could not open SMS app.", Colors.red);
     }
   }
 
