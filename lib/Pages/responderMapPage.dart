@@ -41,6 +41,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   LatLng? _lastStart;
   LatLng? _lastNext;
   double? _lastBearing;
+  final ScrollController _scrollController = ScrollController();
 
   // Ensure this ID matches your backend's expected Responder ID
   String? _myResponderId;
@@ -62,6 +63,18 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     _setupTrackingAndChat();
   }
 
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
   Future<void> _loadChatHistory() async {
     try {
       final response = await http.get(
@@ -71,16 +84,17 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
         final List<dynamic> history = jsonDecode(response.body);
         if (mounted) {
           setState(() {
-            _messages = history
-                .map(
-                  (m) => {
-                    "text": m['message'] ?? m['text'],
-                    "isMe": m['senderId'] == _myResponderId,
-                    "id":
-                        m['_id'], // Track ID to prevent duplicates if necessary
-                  },
-                )
-                .toList();
+            _messages = history.map((m) {
+              final sender = m['senderId'] is Map
+                  ? m['senderId']['_id']
+                  : m['senderId'];
+
+              return {
+                "text": m['message'] ?? m['text'] ?? "",
+                "isMe": sender == _myResponderId,
+                "id": m['_id'],
+              };
+            }).toList();
           });
         }
       }
@@ -468,6 +482,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
                                     itemCount: _messages.length,
                                     itemBuilder: (context, i) =>
                                         _buildBubble(_messages[i]),
+                                    controller: _scrollController,
                                   ),
                                 ),
                                 Padding(

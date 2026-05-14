@@ -68,6 +68,11 @@ class SocketService {
       }
     });
 
+    _socket!.on('new_notification_$userId', (data) {
+      print("🔔 Private Notification Received: ${data['text']}");
+      _messageStreamController.add(data); // Push to the stream so the UI reacts
+    });
+
     // Listener for chat messages
     _socket!.on('message_received', (data) {
       print("📩 Message Received: ${data['text']}");

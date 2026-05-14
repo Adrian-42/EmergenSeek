@@ -58,26 +58,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
   void initState() {
     super.initState();
     _initializePage();
-
-    SocketService().chatStream.listen((data) {
-      if (!mounted) return;
-
-      debugPrint("Incoming Sender: ${data['senderId']}");
-      debugPrint("Current User ID: $_currentUserId");
-      bool isFromOthers =
-          _currentUserId != null && data['senderId'] != _currentUserId;
-
-      if (isFromOthers) {
-        setState(() {
-          _lastMessageText = data['text'] ?? "New message received";
-          _showChatPopup = true;
-        });
-
-        Future.delayed(const Duration(seconds: 7), () {
-          if (mounted) setState(() => _showChatPopup = false);
-        });
-      }
-    });
   }
 
   Future<void> _initializePage() async {
@@ -133,13 +113,12 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           _showChatPopup = true;
         });
 
-        // Trigger the SnackBar notification as well
+        // FIX: Pass the specific String fields, not the 'data' Map
         _showTopNotification(
-          data['senderName'] ?? "New Message",
-          data['text'] ?? "",
+          data['senderName'] ?? "Emergency Alert", // Extract String
+          data['text'] ?? "New message received", // Extract String
         );
 
-        // Auto-hide notification card after 7 seconds
         Future.delayed(const Duration(seconds: 7), () {
           if (mounted) {
             setState(() => _showChatPopup = false);
