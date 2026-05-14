@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:emergenseek/services/socket_service.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:intl/intl.dart'; // FIX: This was missing
+import 'package:intl/intl.dart';
 import 'chatSelectorPage.dart';
 
 class ChatPage extends StatefulWidget {
@@ -34,7 +34,7 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
-    // Unique Room ID logic
+    // Logic for Unique Room ID remains as per your original work
     List<String> ids = [widget.currentUserId, widget.otherUserId];
     ids.sort();
     roomId = ids.join("_");
@@ -48,6 +48,7 @@ class _ChatPageState extends State<ChatPage> {
 
     SocketService().chatStream.listen((data) {
       if (mounted) {
+        // Ensure we only listen to messages belonging to this room
         if (data['roomId'] == roomId) {
           if (data['senderId'] != widget.currentUserId) {
             setState(() {
@@ -64,9 +65,15 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _loadChatHistory() async {
+    // The 404 error comes from this URL.
+    // Ensure your backend has a GET route for /chat-history/:roomId
     final url = "$baseUrl/chat-history/$roomId";
+
     try {
-      final response = await http.get(Uri.parse(url));
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 10));
+
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         if (mounted) {
@@ -82,6 +89,12 @@ class _ChatPageState extends State<ChatPage> {
             _isLoadingHistory = false;
           });
         }
+      } else {
+        // If 404 or other error, stop loading and start with fresh chat
+        debugPrint(
+          "Server returned ${response.statusCode} for history. Starting fresh.",
+        );
+        if (mounted) setState(() => _isLoadingHistory = false);
       }
     } catch (e) {
       debugPrint("Error loading chat history: $e");
@@ -173,7 +186,6 @@ class _ChatPageState extends State<ChatPage> {
                       String timeStr = "";
                       try {
                         DateTime dt = DateTime.parse(msg['timestamp']);
-                        // DateFormat now works because of the import
                         timeStr = DateFormat('hh:mm a').format(dt);
                       } catch (e) {
                         timeStr = "";

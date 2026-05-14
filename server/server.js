@@ -204,6 +204,19 @@ app.get("/active-emergencies", async (req, res) => {
   }
 });
 
+app.get("/chat-history/:roomId", async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const messages = await Message.find({ roomId: roomId })
+      .sort({ timestamp: -1 })
+      .limit(50);
+    res.json(messages.reverse());
+  } catch (err) {
+    console.error("Private Chat History Error:", err);
+    res.status(500).json({ error: "Failed to fetch history" });
+  }
+});
+
 // Route Controllers
 app.use("/", authRoutes);
 app.use("/user", userRoutes);
@@ -224,12 +237,18 @@ io.on("connection", (socket) => {
       senderId: data.senderId,
       receiverId: data.receiverId,
       text: data.text,
+      senderName: data.senderName, // Ensure you pass this from Flutter for the notification
       timestamp: new Date(),
     };
     try {
       const newMessage = new Message(messagePayload);
       await newMessage.save();
+
+      // Emit to the specific room for the ChatPage
       io.to(data.roomId).emit("message_received", messagePayload);
+
+      // Emit to the receiver's private ID for the MapPage notification
+      io.emit("new_notification_${data.receiverId}", messagePayload);
     } catch (e) {
       console.error("Error saving private message:", e);
     }

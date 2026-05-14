@@ -57,22 +57,93 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
   @override
   void initState() {
     super.initState();
-    _loadUserData();
-    _loadCachedPlaces();
-    _initLocationTracking();
+    _initializePage();
 
-    // ADD THIS: Listen for messages while the user is looking at the map
     SocketService().chatStream.listen((data) {
-      // Only show the popup if the message is from someone else
-      if (mounted && data['senderId'] != _currentUserId) {
+      if (!mounted) return;
+
+      debugPrint("Incoming Sender: ${data['senderId']}");
+      debugPrint("Current User ID: $_currentUserId");
+      bool isFromOthers =
+          _currentUserId != null && data['senderId'] != _currentUserId;
+
+      if (isFromOthers) {
         setState(() {
           _lastMessageText = data['text'] ?? "New message received";
           _showChatPopup = true;
         });
 
-        // Automatically hide the notification after 7 seconds
         Future.delayed(const Duration(seconds: 7), () {
           if (mounted) setState(() => _showChatPopup = false);
+        });
+      }
+    });
+  }
+
+  Future<void> _initializePage() async {
+    // 1. Load User ID first so the listener knows who to ignore
+    await _loadUserData();
+
+    // 2. Load other configurations
+    _loadCachedPlaces();
+    _initLocationTracking();
+
+    // 3. Start listening to the socket AFTER _currentUserId is guaranteed to be set
+    _setupChatListener();
+  }
+
+  // 2. Function to trigger the UI pop-up
+  void _showTopNotification(String title, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text(message, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ],
+        ),
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.only(
+          bottom: MediaQuery.of(context).size.height - 150, // Pushes to the top
+          left: 10,
+          right: 10,
+        ),
+        duration: const Duration(seconds: 3),
+        backgroundColor: Colors.redAccent,
+      ),
+    );
+  }
+
+  void _setupChatListener() {
+    SocketService().chatStream.listen((data) {
+      if (!mounted) return;
+
+      debugPrint("Incoming Message from: ${data['senderId']}");
+
+      bool isFromOthers =
+          _currentUserId != null &&
+          data['senderId'] != null &&
+          data['senderId'].toString() != _currentUserId.toString();
+
+      if (isFromOthers) {
+        setState(() {
+          _lastMessageText = data['text'] ?? "New message received";
+          _showChatPopup = true;
+        });
+
+        // Trigger the SnackBar notification as well
+        _showTopNotification(
+          data['senderName'] ?? "New Message",
+          data['text'] ?? "",
+        );
+
+        // Auto-hide notification card after 7 seconds
+        Future.delayed(const Duration(seconds: 7), () {
+          if (mounted) {
+            setState(() => _showChatPopup = false);
+          }
         });
       }
     });
@@ -81,9 +152,13 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
   // Load user data for chat and SOS
   Future<void> _loadUserData() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _currentUserId = prefs.getString('userId');
-    });
+    final id = prefs.getString('userId');
+    if (mounted) {
+      setState(() {
+        _currentUserId = id;
+      });
+      debugPrint("User Data Loaded: $_currentUserId");
+    }
   }
 
   Future<void> _loadCachedPlaces() async {
@@ -505,34 +580,26 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
       ),
       body: Stack(
         children: [
+          // Chat Notification Popup Layer
           if (_showChatPopup)
             Positioned(
-              top: 100, // Appears below the AppBar
+              top: 100, // Adjust based on your AppBar height
               left: 15,
               right: 15,
               child: GestureDetector(
-                onTap:
-                    _openChat, // Clicking the notification opens the chat page
+                onTap: _openChat, // Navigates to chat and hides popup
                 child: Card(
-                  color: Colors.white,
                   elevation: 10,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(15),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12.0,
-                      vertical: 8.0,
-                    ),
+                    padding: const EdgeInsets.all(12.0),
                     child: Row(
                       children: [
                         const CircleAvatar(
                           backgroundColor: Colors.blueAccent,
-                          child: Icon(
-                            Icons.chat,
-                            color: Colors.white,
-                            size: 20,
-                          ),
+                          child: Icon(Icons.chat, color: Colors.white),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -551,13 +618,12 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
                                 _lastMessageText,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: Colors.black87),
                               ),
                             ],
                           ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.close, size: 20),
+                          icon: const Icon(Icons.close),
                           onPressed: () =>
                               setState(() => _showChatPopup = false),
                         ),

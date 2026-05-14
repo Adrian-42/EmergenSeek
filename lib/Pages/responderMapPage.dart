@@ -7,6 +7,7 @@ import 'package:emergenseek/services/socket_service.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ResponderMapPage extends StatefulWidget {
@@ -42,7 +43,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   double? _lastBearing;
 
   // Ensure this ID matches your backend's expected Responder ID
-  final String _myResponderId = "ACTUAL_LOGGED_IN_ID";
+  String? _myResponderId;
 
   final String baseUrl = "https://emergenseek.onrender.com";
 
@@ -53,7 +54,10 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   }
 
   Future<void> _initializeData() async {
-    // Run these in parallel to speed up page load
+    final prefs = await SharedPreferences.getInstance();
+    _myResponderId = prefs.getString(
+      'userId',
+    ); // Ensure key matches your login logic
     await Future.wait([_fetchVictimDetails(), _loadChatHistory()]);
     _setupTrackingAndChat();
   }
@@ -119,8 +123,6 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     _chatSubscription = SocketService().chatStream.listen((data) {
       if (!mounted) return;
 
-      // FIX: Only add to list if the message is from the OTHER person.
-      // Your own messages are added instantly in _sendMessage to keep the UI snappy.
       if (data['emergencyId'] == widget.activeEmergencyId &&
           data['senderId'] != _myResponderId) {
         setState(() {
@@ -152,13 +154,19 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     final msg = _chatController.text.trim();
 
     // 1. Send to Socket
-    SocketService().sendMessage(widget.activeEmergencyId, msg, _myResponderId);
+    if (_myResponderId != null) {
+      SocketService().sendMessage(
+        widget.activeEmergencyId,
+        msg,
+        _myResponderId!,
+      );
 
-    // 2. Update UI locally (This is your "isMe" message)
-    setState(() {
-      _messages.add({"text": msg, "isMe": true});
-      _chatController.clear();
-    });
+      // 2. Update UI locally (This is your "isMe" message)
+      setState(() {
+        _messages.add({"text": msg, "isMe": true});
+        _chatController.clear();
+      });
+    }
   }
 
   // --- MAP & NAVIGATION LOGIC (RETAINED) ---
