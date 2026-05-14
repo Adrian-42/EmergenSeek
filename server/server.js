@@ -72,17 +72,43 @@ app.get("/emergency/chat/:emergencyId", async (req, res) => {
 });
 
 // Responders List
+// --- FIXED: RESPONDERS IN EMERGENCY ENDPOINT ---
 app.get("/emergency/responders/:emergencyId", async (req, res) => {
   try {
+    const { emergencyId } = req.params;
+
+    // 1. Validation: Prevent CastError if the ID is malformed
+    if (!mongoose.Types.ObjectId.isValid(emergencyId)) {
+      console.error(`Invalid Emergency ID format: ${emergencyId}`);
+      return res.status(400).json({ error: "Invalid emergency ID format" });
+    }
+
+    // 2. Get unique sender IDs from the Message collection
     const responders = await Message.distinct("senderId", {
-      emergencyId: req.params.emergencyId,
+      emergencyId: emergencyId,
     });
-    const details = await User.find({ _id: { $in: responders } }).select(
-      "name phoneNumber",
+
+    if (!responders || responders.length === 0) {
+      return res.json([]); // Return empty list instead of erroring
+    }
+
+    // 3. Fetch details, filtering out any potentially invalid sender IDs
+    const validResponderIds = responders.filter((id) =>
+      mongoose.Types.ObjectId.isValid(id),
     );
+
+    const details = await User.find({
+      _id: { $in: validResponderIds },
+    }).select("name phoneNumber");
+
     res.json(details);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch responders" });
+    // This will show up in your Render "Logs" tab
+    console.error("CRITICAL ROUTE ERROR:", err);
+    res.status(500).json({
+      error: "Failed to fetch responders",
+      details: err.message,
+    });
   }
 });
 
