@@ -593,19 +593,6 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _markAsArrived,
-                        icon: const Icon(Icons.check_circle),
-                        label: const Text("ARRIVED"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green[700],
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                        ),
-                      ),
-                    ),
                   ],
                 ),
               ),

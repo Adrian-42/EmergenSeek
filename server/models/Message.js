@@ -1,3 +1,5 @@
+import mongoose from "mongoose";
+
 const MessageSchema = new mongoose.Schema({
   emergencyId: { type: String, index: true },
   roomId: { type: String, index: true },
