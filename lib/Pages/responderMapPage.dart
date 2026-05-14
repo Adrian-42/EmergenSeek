@@ -29,14 +29,18 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   Position? _currentPosition;
   String? _victimPhoneNumber;
   String _victimName = "Victim";
+  String _victimAddress = "Fetching location details...";
 
   final TextEditingController _chatController = TextEditingController();
   List<Map<String, dynamic>> _messages = [];
+  bool _isLoading = true;
+  bool _isChatExpanded = false; // Toggle for the dropdown animation
 
   double _currentZoom = 17.0;
   LatLng? _lastStart;
   LatLng? _lastNext;
   double? _lastBearing;
+  String _myResponderId = "ACTUAL_LOGGED_IN_ID";
 
   final String baseUrl = "https://emergenseek.onrender.com";
 
@@ -57,53 +61,60 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
         setState(() {
           _victimPhoneNumber = data['phoneNumber'] ?? data['phone'];
           _victimName = data['fullName'] ?? data['name'] ?? "Victim";
+          _victimAddress = data['address'] ?? "No specific address provided";
+          _isLoading = false;
         });
       }
     } catch (e) {
       debugPrint("Error fetching victim details: $e");
+      setState(() => _isLoading = false);
     }
   }
 
   void _setupTrackingAndChat() {
-    // Start streaming for this specific emergency
     SocketService().startEmergencyStreaming(widget.activeEmergencyId);
 
-    // Listen for Victim Location Updates
     _locationSubscription = SocketService().locationStream.listen((LatLng pos) {
       if (!mounted) return;
       _lastKnownVictimPos = pos;
       _getRoadDirections(pos);
     });
 
-    // Listen for Real-time Chat Messages
     _chatSubscription = SocketService().chatStream.listen((data) {
-      if (mounted) {
+      // Check if message belongs to this emergency
+      if (mounted && data['emergencyId'] == widget.activeEmergencyId) {
         setState(() {
           _messages.add({
-            "text": data['message'],
-            "isMe":
-                data['senderId'] ==
-                "REPLACE_WITH_YOUR_RESPONDER_ID", // Compare IDs
+            "text": data['text'] ?? data['message'],
+            // Compare with actual logged-in ID instead of hardcoded string
+            "isMe": data['senderId'] == _myResponderId,
           });
         });
       }
     });
   }
 
-  // --- INTERNAL NAVIGATION LOGIC ---
+  Future<void> _makeDirectCall() async {
+    if (_victimPhoneNumber == null || _victimPhoneNumber!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Phone number not available")),
+      );
+      return;
+    }
+    final Uri launchUri = Uri(scheme: 'tel', path: _victimPhoneNumber);
+    if (await canLaunchUrl(launchUri)) {
+      await launchUrl(launchUri);
+    }
+  }
+
   void _recenterOnVictim() {
     if (_lastKnownVictimPos != null && _controller != null) {
       _controller!.animateCamera(
         CameraUpdate.newLatLngZoom(_lastKnownVictimPos!, 18),
       );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Waiting for victim's location...")),
-      );
     }
   }
 
-  // --- BACKEND ACTION: ARRIVED ---
   Future<void> _markAsArrived() async {
     try {
       final response = await http.patch(
@@ -125,12 +136,12 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     }
   }
 
-  // --- BACKEND ACTION: SEND CHAT ---
   void _sendMessage() {
     if (_chatController.text.trim().isEmpty) return;
 
     final msg = _chatController.text.trim();
-    SocketService().emitChatMessage(widget.activeEmergencyId, msg);
+    // Pass the actual responder ID here
+    SocketService().sendMessage(widget.activeEmergencyId, msg, _myResponderId);
 
     setState(() {
       _messages.add({"text": msg, "isMe": true});
@@ -138,7 +149,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     });
   }
 
-  // --- DYNAMIC ARROW & ROUTING LOGIC (Preserved) ---
+  // --- DYNAMIC ARROW & ROUTING LOGIC (RETAINED) ---
   double _calculateDynamicSize(double zoom) {
     if (zoom >= 18) return 0.0001;
     if (zoom >= 17) return 0.0002;
@@ -151,11 +162,9 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     _lastBearing = bearing;
     double arrowSizeDegrees = _calculateDynamicSize(_currentZoom);
     double bearingRad = bearing * math.pi / 180.0;
-
     double peakLat = (start.latitude) + arrowSizeDegrees * math.cos(bearingRad);
     double peakLng =
         (start.longitude) + arrowSizeDegrees * math.sin(bearingRad);
-
     double sideOffset = arrowSizeDegrees * 0.6;
     double bLeftLat =
         start.latitude + sideOffset * math.cos(bearingRad - (math.pi / 2));
@@ -188,7 +197,6 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     _currentPosition = await Geolocator.getCurrentPosition();
     final url =
         "$baseUrl/get-directions?origin=${_currentPosition!.latitude},${_currentPosition!.longitude}&destination=${destination.latitude},${destination.longitude}";
-
     try {
       final response = await http.get(Uri.parse(url));
       final data = jsonDecode(response.body);
@@ -199,7 +207,6 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
         List<LatLng> coords = result
             .map((p) => LatLng(p.latitude, p.longitude))
             .toList();
-
         setState(() {
           _polylines = {
             Polyline(
@@ -219,7 +226,6 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
             ),
           );
         });
-
         if (coords.length > 1) {
           double bearing = Geolocator.bearingBetween(
             coords[0].latitude,
@@ -245,150 +251,290 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text("Tracking $_victimName"),
-        backgroundColor: Colors.redAccent,
-      ),
-      body: Stack(
-        children: [
-          GoogleMap(
-            initialCameraPosition: const CameraPosition(
-              target: LatLng(14.59, 120.98),
-              zoom: 17,
-            ),
-            onMapCreated: (c) => _controller = c,
-            onCameraMove: (pos) {
-              _currentZoom = pos.zoom;
-              if (_lastStart != null)
-                _createDynamicArrowPolygon(
-                  _lastStart!,
-                  _lastNext!,
-                  _lastBearing!,
-                );
-            },
-            markers: _markers,
-            polylines: _polylines,
-            polygons: _polygons,
-            myLocationEnabled: true,
-          ),
+    String recentChat = _messages.isNotEmpty
+        ? _messages.last['text']
+        : "No messages yet...";
 
-          // Control Panel
-          Positioned(
-            bottom: 30,
-            left: 20,
-            right: 20,
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    FloatingActionButton.extended(
-                      onPressed: _openChatModal,
-                      label: const Text("CHAT"),
-                      icon: const Icon(Icons.chat),
-                      heroTag: "c1",
+    return Stack(
+      children: [
+        Scaffold(
+          appBar: AppBar(
+            title: Text("Tracking $_victimName"),
+            backgroundColor: Colors.redAccent,
+          ),
+          body: Stack(
+            children: [
+              GoogleMap(
+                initialCameraPosition: const CameraPosition(
+                  target: LatLng(14.59, 120.98),
+                  zoom: 17,
+                ),
+                onMapCreated: (c) => _controller = c,
+                onCameraMove: (pos) {
+                  _currentZoom = pos.zoom;
+                  if (_lastStart != null)
+                    _createDynamicArrowPolygon(
+                      _lastStart!,
+                      _lastNext!,
+                      _lastBearing!,
+                    );
+                },
+                markers: _markers,
+                polylines: _polylines,
+                polygons: _polygons,
+                myLocationEnabled: true,
+              ),
+
+              // --- INTEGRATED INFO & CHAT CARD ---
+              Positioned(
+                top: 20,
+                left: 15,
+                right: 15,
+                child: GestureDetector(
+                  onTap: () =>
+                      setState(() => _isChatExpanded = !_isChatExpanded),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 400),
+                    curve: Curves.easeInOut,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(15),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 10,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
                     ),
-                    FloatingActionButton(
-                      onPressed: () {},
-                      backgroundColor: Colors.green,
-                      child: const Icon(Icons.phone),
-                      heroTag: "c2",
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(15),
+                          child: Column(
+                            children: [
+                              Row(
+                                children: [
+                                  const CircleAvatar(
+                                    backgroundColor: Colors.redAccent,
+                                    child: Icon(
+                                      Icons.person,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _victimName,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 17,
+                                          ),
+                                        ),
+                                        Text(
+                                          _victimPhoneNumber ?? "No Phone",
+                                          style: TextStyle(
+                                            color: Colors.grey[600],
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Icon(
+                                    _isChatExpanded
+                                        ? Icons.keyboard_arrow_up
+                                        : Icons.keyboard_arrow_down,
+                                    color: Colors.grey,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              // COLLAPSED VS EXPANDED TOGGLE
+                              AnimatedCrossFade(
+                                firstChild: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.location_on,
+                                      color: Colors.blueAccent,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        _victimAddress,
+                                        style: const TextStyle(fontSize: 13),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                secondChild: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.chat_bubble_outline,
+                                      color: Colors.green,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        "Recent: $recentChat",
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.green,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                crossFadeState: _isChatExpanded
+                                    ? CrossFadeState.showSecond
+                                    : CrossFadeState.showFirst,
+                                duration: const Duration(milliseconds: 300),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // REVEALED CHAT SECTION
+                        if (_isChatExpanded) ...[
+                          const Divider(height: 1),
+                          SizedBox(
+                            height: 250,
+                            child: Column(
+                              children: [
+                                Expanded(
+                                  child: ListView.builder(
+                                    padding: const EdgeInsets.all(10),
+                                    itemCount: _messages.length,
+                                    itemBuilder: (context, i) =>
+                                        _buildBubble(_messages[i]),
+                                  ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 8,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _chatController,
+                                          decoration: InputDecoration(
+                                            hintText: "Reply to victim...",
+                                            isDense: true,
+                                            contentPadding:
+                                                const EdgeInsets.all(12),
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.send,
+                                          color: Colors.blueAccent,
+                                        ),
+                                        onPressed: _sendMessage,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              // Bottom Control Buttons
+              Positioned(
+                bottom: 30,
+                left: 20,
+                right: 20,
+                child: Column(
+                  children: [
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FloatingActionButton(
+                        onPressed: _makeDirectCall,
+                        backgroundColor: Colors.green,
+                        child: const Icon(Icons.phone),
+                        heroTag: "call_fab",
+                      ),
+                    ),
+                    const SizedBox(height: 15),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _recenterOnVictim,
+                        icon: const Icon(Icons.gps_fixed),
+                        label: const Text("NAVIGATE"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blueAccent,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _markAsArrived,
+                        icon: const Icon(Icons.check_circle),
+                        label: const Text("ARRIVED"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green[700],
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                        ),
+                      ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 15),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed:
-                        _recenterOnVictim, // Now strictly internal navigation
-                    icon: const Icon(Icons.gps_fixed),
-                    label: const Text("NAVIGATE"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                    ),
+              ),
+            ],
+          ),
+        ),
+
+        if (_isLoading)
+          Container(
+            color: Colors.black54,
+            child: Center(
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(25.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      CircularProgressIndicator(color: Colors.redAccent),
+                      SizedBox(height: 20),
+                      Text(
+                        "Synchronizing Emergency Data...",
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _markAsArrived, // Dynamic Backend Call
-                    icon: const Icon(Icons.check_circle),
-                    label: const Text("I HAVE ARRIVED"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[700],
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  void _openChatModal() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => _buildChatSheet(),
-    );
-  }
-
-  Widget _buildChatSheet() {
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: Container(
-        height: 400,
-        color: Colors.white,
-        child: Column(
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(10),
-              child: Text(
-                "Emergency Chat",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            Expanded(
-              child: StatefulBuilder(
-                builder: (context, setModalState) {
-                  return ListView.builder(
-                    itemCount: _messages.length,
-                    itemBuilder: (context, i) => _buildBubble(_messages[i]),
-                  );
-                },
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _chatController,
-                      decoration: const InputDecoration(hintText: "Type..."),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.send),
-                    onPressed: _sendMessage,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+      ],
     );
   }
 
@@ -397,15 +543,21 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.all(5),
-        padding: const EdgeInsets.all(10),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: isMe ? Colors.blue : Colors.grey[300],
-          borderRadius: BorderRadius.circular(10),
+          color: isMe ? Colors.blueAccent : Colors.grey[200],
+          borderRadius: BorderRadius.circular(12).copyWith(
+            bottomRight: isMe ? Radius.zero : const Radius.circular(12),
+            bottomLeft: isMe ? const Radius.circular(12) : Radius.zero,
+          ),
         ),
         child: Text(
           msg['text'],
-          style: TextStyle(color: isMe ? Colors.white : Colors.black),
+          style: TextStyle(
+            color: isMe ? Colors.white : Colors.black87,
+            fontSize: 13,
+          ),
         ),
       ),
     );

@@ -54,9 +54,13 @@ class SocketService {
     // Listener for live location updates (Used by Responders)
     _socket!.on('location_received', (data) {
       try {
-        if (data['lat'] != null && data['lng'] != null) {
-          double lat = double.parse(data['lat'].toString());
-          double lng = double.parse(data['lng'].toString());
+        // Updated to check for both 'lat'/'lng' and 'latitude'/'longitude'
+        var latVal = data['lat'] ?? data['latitude'];
+        var lngVal = data['lng'] ?? data['longitude'];
+
+        if (latVal != null && lngVal != null) {
+          double lat = double.parse(latVal.toString());
+          double lng = double.parse(lngVal.toString());
           _locationStreamController.add(LatLng(lat, lng));
         }
       } catch (e) {
@@ -66,6 +70,7 @@ class SocketService {
 
     // Listener for chat messages
     _socket!.on('message_received', (data) {
+      print("📩 Message Received: ${data['text']}");
       _messageStreamController.add(data);
     });
 
@@ -94,14 +99,14 @@ class SocketService {
 
   /// Alias for sendMessage to fix the "emitChatMessage isn't defined" error
   void emitChatMessage(String emergencyId, String text) {
-    // Note: Since this alias doesn't take a senderId, you might want to
-    // retrieve the current user's ID here or update the UI to pass it.
+    // Note: It's better to pass the actual ID, but keeping your signature
     sendMessage(emergencyId, text, "responder_internal_id");
   }
 
   /// Shared messaging function for both roles
   void sendMessage(String emergencyId, String text, String senderId) {
     if (_socket?.connected ?? false) {
+      print("📤 Sending Message: $text to Room: $emergencyId");
       _socket!.emit('send_message', {
         'emergencyId': emergencyId,
         'senderId': senderId,

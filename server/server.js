@@ -168,17 +168,35 @@ app.get("/active-emergencies", async (req, res) => {
 io.on("connection", (socket) => {
   console.log(`🔌 User Connected: ${socket.id}`);
 
+  // Both Victim and Responder call this to enter the private room
   socket.on("join_emergency", (emergencyId) => {
     socket.join(emergencyId);
     console.log(`📡 Socket ${socket.id} joined room: ${emergencyId}`);
   });
 
+  // Handle Location Updates from Victim
   socket.on("update_location", (data) => {
-    socket.to(data.emergencyId).emit("location_received", data);
+    // Expected data: { emergencyId: "...", lat: 1.23, lng: 4.56 }
+    socket.to(data.emergencyId).emit("location_received", {
+      latitude: data.lat,
+      longitude: data.lng,
+    });
   });
 
+  // Handle Chat Messages
   socket.on("send_message", (data) => {
-    io.to(data.emergencyId).emit("message_received", data);
+    const messagePayload = {
+      emergencyId: data.emergencyId,
+      text: data.text,
+      senderId: data.senderId,
+      timestamp: new Date(),
+    };
+
+    // Use io.to() so the sender also gets a copy (helps with multi-device sync)
+    // or just socket.to() if you only want the "other" person to hear it.
+    io.to(data.emergencyId).emit("message_received", messagePayload);
+
+    console.log(`💬 Message in ${data.emergencyId}: ${data.text}`);
   });
 
   socket.on("disconnect", () => {

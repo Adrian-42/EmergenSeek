@@ -12,10 +12,17 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:emergenseek/Pages/SettingsPage.dart';
 import 'package:emergenseek/Pages/safety_guide_page.dart';
+import 'package:emergenseek/Pages/ChatPage.dart';
 
 class EmergencyMapPage extends StatefulWidget {
   final bool isResponder;
-  const EmergencyMapPage({super.key, this.isResponder = false});
+  final String activeEmergencyId; // Added to receive the victim/room ID
+
+  const EmergencyMapPage({
+    super.key,
+    this.isResponder = false,
+    this.activeEmergencyId = "",
+  });
 
   @override
   State<EmergencyMapPage> createState() => _EmergencyMapPageState();
@@ -32,7 +39,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
 
   bool isSafe = true;
   bool _showDetails = false;
-  bool isSendingSOS = false; // Added to prevent double-tapping SOS
+  bool isSendingSOS = false;
   List<dynamic> _nearbyPlaces = [];
   int _currentIndex = 0;
   String _currentType = '';
@@ -43,11 +50,22 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
   double? _lastBearing;
   double _currentZoom = 15.0;
 
+  String? _currentUserId; // To store the logged-in user's ID
+
   @override
   void initState() {
     super.initState();
+    _loadUserData();
     _loadCachedPlaces();
     _initLocationTracking();
+  }
+
+  // Load user data for chat and SOS
+  Future<void> _loadUserData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _currentUserId = prefs.getString('userId');
+    });
   }
 
   Future<void> _loadCachedPlaces() async {
@@ -119,10 +137,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     setState(() => isSendingSOS = true);
     _showSnackBar("🚨 Alerting Emergency Contacts...", Colors.red);
 
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString('userId');
-
-    if (userId == null) {
+    if (_currentUserId == null) {
       _showSnackBar("User ID not found.", Colors.red);
       setState(() => isSendingSOS = false);
       return;
@@ -132,12 +147,14 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
         "https://www.google.com/maps/search/?api=1&query=${currentPosition!.latitude},${currentPosition!.longitude}";
 
     try {
-      // 1. Attempt to send via Nodemailer (Backend)
       final response = await http
           .post(
             Uri.parse("$baseUrl/trigger-sos"),
             headers: {"Content-Type": "application/json"},
-            body: jsonEncode({"userId": userId, "locationLink": googleMapsUrl}),
+            body: jsonEncode({
+              "userId": _currentUserId,
+              "locationLink": googleMapsUrl,
+            }),
           )
           .timeout(const Duration(seconds: 15));
 
@@ -146,17 +163,16 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
       if (response.statusCode == 200) {
         _showSnackBar("✅ SOS Emails Sent!", Colors.green);
       } else if (responseData['fallbackToSms'] == true) {
-        // Backend explicitly asked for SMS fallback
         _triggerDirectSMS(responseData['phoneNumbers'], googleMapsUrl);
       } else {
         throw Exception("Server side error");
       }
     } catch (e) {
-      // 2. Catch Timeout/Network error and trigger SMS fallback manually
       debugPrint("Email SOS failed, attempting SMS fallback: $e");
 
-      // Fetch numbers locally from the user profile since the SOS route timed out
-      final userRes = await http.get(Uri.parse("$baseUrl/user/$userId"));
+      final userRes = await http.get(
+        Uri.parse("$baseUrl/user/$_currentUserId"),
+      );
       if (userRes.statusCode == 200) {
         final userData = jsonDecode(userRes.body);
         final List contacts = userData['emergencyContacts'] ?? [];
@@ -171,14 +187,12 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
         }
       }
     } finally {
-      // Prevent rapid spamming of the SOS button
       Future.delayed(const Duration(seconds: 10), () {
         if (mounted) setState(() => isSendingSOS = false);
       });
     }
   }
 
-  // Helper to launch the native SMS app
   Future<void> _triggerDirectSMS(List phoneNumbers, String locationLink) async {
     final String separator = Platform.isAndroid ? ',' : ';';
     final String recipients = phoneNumbers.join(separator);
@@ -206,8 +220,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
 
   // --- STATUS TOGGLE (SAFE/HELP) ---
   Future<void> _updateSafetyStatus(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString('userId') ?? "unknown";
+    if (_currentUserId == null) return;
 
     setState(() => isSafe = value);
 
@@ -215,7 +228,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
       Uri.parse("$baseUrl/user/status"),
       headers: {"Content-Type": "application/json"},
       body: jsonEncode({
-        "userId": userId,
+        "userId": _currentUserId,
         "isSafe": isSafe,
         "lastLocation": {
           "lat": currentPosition?.latitude,
@@ -228,7 +241,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
       _socketTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
         if (currentPosition != null && !isSafe) {
           SocketService().sendLiveLocation(
-            userId,
+            _currentUserId!,
             currentPosition!.latitude,
             currentPosition!.longitude,
           );
@@ -379,6 +392,29 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     );
   }
 
+  void _openChat() {
+    // If we are a responder, the room ID is the activeEmergencyId passed in.
+    // If we are the victim, the room ID is our own userId.
+    String roomToJoin = widget.isResponder
+        ? widget.activeEmergencyId
+        : (_currentUserId ?? "");
+
+    if (roomToJoin.isEmpty) {
+      _showSnackBar("No active emergency chat available.", Colors.orange);
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ChatPage(
+          emergencyId: roomToJoin,
+          currentUserId: _currentUserId ?? "unknown",
+        ),
+      ),
+    );
+  }
+
   void _nextPlace() => setState(() {
     _currentIndex = (_currentIndex + 1) % _nearbyPlaces.length;
     _showCurrentFacility();
@@ -479,6 +515,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
               }
             },
           ),
+          // Safety Guide Button
           Positioned(
             top: 80,
             left: 10,
@@ -510,6 +547,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
               ),
             ),
           ),
+          // SOS Button
           Positioned(
             left: 20,
             top: 450,
@@ -526,6 +564,18 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
               ),
             ),
           ),
+          // Chat Button
+          Positioned(
+            right: 20,
+            top: 450,
+            child: FloatingActionButton(
+              heroTag: "chat_btn",
+              backgroundColor: Colors.blueAccent,
+              onPressed: _openChat,
+              child: const Icon(Icons.chat),
+            ),
+          ),
+          // Safety Status Toggle
           Positioned(
             left: 20,
             top: 525,
@@ -539,6 +589,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
               ),
             ),
           ),
+          // Recenter Button
           Positioned(
             right: 20,
             top: 525,
@@ -549,6 +600,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
               child: const Icon(Icons.my_location, color: Colors.blue),
             ),
           ),
+          // Facility Details Card
           if (_showDetails && currentPlace != null)
             Positioned(
               top: 100,
@@ -601,22 +653,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.access_time,
-                            size: 16,
-                            color: Colors.green,
-                          ),
-                          const SizedBox(width: 5),
-                          Text(
-                            currentPlace['opening_hours']?['open_now'] == true
-                                ? "Open Now"
-                                : "Status Unknown",
-                          ),
-                        ],
-                      ),
                       const Divider(),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -641,6 +677,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
                 ),
               ),
             ),
+          // Bottom Status and Search Panel
           Positioned(
             bottom: 0,
             left: 0,
@@ -710,10 +747,6 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
                               setState(() => _showDetails = !_showDetails),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.call, color: Colors.green),
-                          onPressed: _makeCall,
-                        ),
-                        IconButton(
                           icon: const Icon(Icons.arrow_forward_ios),
                           onPressed: _nextPlace,
                         ),
@@ -747,5 +780,12 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
         ),
       ],
     );
+  }
+
+  @override
+  void dispose() {
+    _socketTimer?.cancel();
+    mapController?.dispose();
+    super.dispose();
   }
 }
