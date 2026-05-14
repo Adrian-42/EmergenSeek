@@ -11,6 +11,7 @@ class ChatPage extends StatefulWidget {
   final String otherUserId;
   final String otherUserName;
   final String emergencyId;
+  final String roomId;
 
   const ChatPage({
     super.key,
@@ -18,6 +19,7 @@ class ChatPage extends StatefulWidget {
     required this.otherUserId,
     required this.otherUserName,
     required this.emergencyId,
+    required this.roomId,
   });
 
   @override

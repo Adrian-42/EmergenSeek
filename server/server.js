@@ -1,19 +1,19 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const axios = require("axios");
-const cors = require("cors");
-const mongoose = require("mongoose");
-require("dotenv").config();
-const nodemailer = require("nodemailer");
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import axios from "axios";
+import cors from "cors";
+import mongoose from "mongoose";
+import "dotenv/config";
+import nodemailer from "nodemailer";
 
-// Models
-const User = require("./models/User");
-const Message = require("./models/Message");
+// Models - Note: Added .js extension which is mandatory for ES Modules in Node
+import User from "./models/User.js";
+import Message from "./models/Message.js";
 
 // Route Imports
-const authRoutes = require("./routes/auth");
-const userRoutes = require("./routes/userRoutes");
+import authRoutes from "./routes/auth.js";
+import userRoutes from "./routes/userRoutes.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -56,6 +56,18 @@ const transporter = nodemailer.createTransport({
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 
+// --- HELPER FUNCTIONS ---
+const formatPHNumber = (phone) => {
+  let cleaned = phone.replace(/\D/g, ""); // Remove non-digits
+  if (cleaned.startsWith("09") && cleaned.length === 11) {
+    return `+63${cleaned.substring(1)}`;
+  }
+  if (cleaned.startsWith("63") && cleaned.length === 12) {
+    return `+${cleaned}`;
+  }
+  return cleaned.startsWith("+") ? cleaned : `+${cleaned}`;
+};
+
 // --- API ROUTES ---
 
 // Chat History
@@ -72,27 +84,23 @@ app.get("/emergency/chat/:emergencyId", async (req, res) => {
 });
 
 // Responders List
-// --- FIXED: RESPONDERS IN EMERGENCY ENDPOINT ---
 app.get("/emergency/responders/:emergencyId", async (req, res) => {
   try {
     const { emergencyId } = req.params;
 
-    // 1. Validation: Prevent CastError if the ID is malformed
     if (!mongoose.Types.ObjectId.isValid(emergencyId)) {
       console.error(`Invalid Emergency ID format: ${emergencyId}`);
       return res.status(400).json({ error: "Invalid emergency ID format" });
     }
 
-    // 2. Get unique sender IDs from the Message collection
     const responders = await Message.distinct("senderId", {
       emergencyId: emergencyId,
     });
 
     if (!responders || responders.length === 0) {
-      return res.json([]); // Return empty list instead of erroring
+      return res.json([]);
     }
 
-    // 3. Fetch details, filtering out any potentially invalid sender IDs
     const validResponderIds = responders.filter((id) =>
       mongoose.Types.ObjectId.isValid(id),
     );
@@ -103,7 +111,6 @@ app.get("/emergency/responders/:emergencyId", async (req, res) => {
 
     res.json(details);
   } catch (err) {
-    // This will show up in your Render "Logs" tab
     console.error("CRITICAL ROUTE ERROR:", err);
     res.status(500).json({
       error: "Failed to fetch responders",
@@ -111,16 +118,7 @@ app.get("/emergency/responders/:emergencyId", async (req, res) => {
     });
   }
 });
-const formatPHNumber = (phone) => {
-  let cleaned = phone.replace(/\D/g, ""); // Remove non-digits
-  if (cleaned.startsWith("09") && cleaned.length === 11) {
-    return `+63${cleaned.substring(1)}`;
-  }
-  if (cleaned.startsWith("63") && cleaned.length === 12) {
-    return `+${cleaned}`;
-  }
-  return cleaned.startsWith("+") ? cleaned : `+${cleaned}`;
-};
+
 // SOS Trigger
 app.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
@@ -134,7 +132,6 @@ app.post("/trigger-sos", async (req, res) => {
       return res.status(404).json({ error: "No contacts found" });
     }
 
-    // Format all phone numbers to +63 standard
     const phoneNumbers = user.emergencyContacts
       .map((c) => c.phone)
       .filter((p) => p)
@@ -145,7 +142,6 @@ app.post("/trigger-sos", async (req, res) => {
       .filter((email) => email)
       .join(", ");
 
-    // 1. Attempt Email
     if (recipientEmails) {
       const mailOptions = {
         from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
@@ -158,11 +154,10 @@ app.post("/trigger-sos", async (req, res) => {
       await transporter.sendMail(mailOptions);
     }
 
-    // 2. Return success with formatted numbers for the Frontend to trigger SMS
     res.json({
       message: "SOS Processed",
       emailSent: !!recipientEmails,
-      phoneNumbers: phoneNumbers, // These are now +63xxxxxxxxx
+      phoneNumbers: phoneNumbers,
     });
   } catch (err) {
     console.error("SOS Error:", err);
@@ -178,7 +173,7 @@ app.post("/trigger-sos", async (req, res) => {
   }
 });
 
-// Google Places & Directions
+// Places & Directions
 app.get("/places", async (req, res) => {
   const { lat, lng, type } = req.query;
   try {
@@ -204,7 +199,6 @@ app.get("/get-directions", async (req, res) => {
   }
 });
 
-// Active Emergencies
 app.get("/active-emergencies", async (req, res) => {
   try {
     const activeUsers = await User.find({ isSafe: false })
@@ -243,7 +237,6 @@ app.use("/user", userRoutes);
 io.on("connection", (socket) => {
   console.log(`🔌 User Connected: ${socket.id}`);
 
-  // 1. Private (One-on-One) Chat
   socket.on("join_private_chat", (roomId) => {
     socket.join(roomId);
     console.log(`👤 Private Room Joined: ${roomId}`);
@@ -252,32 +245,26 @@ io.on("connection", (socket) => {
   socket.on("send_private_message", async (data) => {
     const messagePayload = {
       roomId: data.roomId,
-      emergencyId: data.emergencyId || data.roomId, // Ensure this is saved!
       senderId: data.senderId,
       receiverId: data.receiverId,
-      text: data.text || data.message, // Support both keys
+      text: data.text,
       senderName: data.senderName,
       timestamp: new Date(),
     };
 
     try {
       const newMessage = new Message(messagePayload);
-      sendFCMNotification(receiverId, messagePayload.text);
-      await newMessage.save(); // This persists it to MongoDB
-
-      // Emit to the specific room
+      await newMessage.save();
       io.to(data.roomId).emit("message_received", messagePayload);
-
-      // Notification for the receiver
       io.emit(`new_notification_${data.receiverId}`, messagePayload);
-
-      console.log(`✅ Message saved and routed from ${data.senderId}`);
+      console.log(
+        `✅ Message routed from ${data.senderId} to ${data.receiverId}`,
+      );
     } catch (e) {
       console.error("❌ Error saving private message:", e);
     }
   });
 
-  // 2. Emergency Room (Group) Chat
   socket.on("join_emergency", (emergencyId) => {
     socket.join(emergencyId);
     console.log(`📡 Socket ${socket.id} joined room: ${emergencyId}`);
@@ -299,7 +286,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 3. Tracking & Disconnect
   socket.on("update_location", (data) => {
     socket
       .to(data.emergencyId)
