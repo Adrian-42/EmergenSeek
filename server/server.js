@@ -1,12 +1,13 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io"); // Correct import for v4+
+const { Server } = require("socket.io");
 const axios = require("axios");
 const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
 const nodemailer = require("nodemailer");
 const User = require("./models/User");
+const Message = require("./models/Message"); // ADDED: Message Model
 
 // Route Imports
 const authRoutes = require("./routes/auth");
@@ -15,7 +16,7 @@ const userRoutes = require("./routes/userRoutes");
 const app = express();
 const server = http.createServer(app);
 
-// --- MIDDLEWARE (MUST BE BEFORE ROUTES) ---
+// --- MIDDLEWARE ---
 app.use(
   cors({
     origin: "*",
@@ -48,10 +49,21 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// --- NEW: CHAT HISTORY ENDPOINT ---
+app.get("/chat-history/:emergencyId", async (req, res) => {
+  try {
+    const messages = await Message.find({ emergencyId: req.params.emergencyId })
+      .sort({ timestamp: -1 }) // Get newest first for the Flutter ListView
+      .limit(50);
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch chat history" });
+  }
+});
+
 // --- SOS ROUTE ---
 app.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
-
   try {
     const user = await User.findById(userId);
     if (
@@ -61,19 +73,14 @@ app.post("/trigger-sos", async (req, res) => {
     ) {
       return res.status(404).json({ error: "No contacts found" });
     }
-
-    // 1. Prepare Phone Numbers for Fallback
     const phoneNumbers = user.emergencyContacts
       .map((c) => c.phone)
       .filter((p) => p);
-
-    // 2. Prepare Emails
     const recipientEmails = user.emergencyContacts
       .map((c) => c.email)
       .filter((email) => email)
       .join(", ");
 
-    // Fallback if no emails are provided at all
     if (!recipientEmails) {
       return res.status(202).json({
         message: "No emails provided. Falling back to SMS.",
@@ -86,23 +93,14 @@ app.post("/trigger-sos", async (req, res) => {
       from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
       to: recipientEmails,
       subject: `🚨 EMERGENCY SOS - ${user.name} Needs Help!`,
-      html: `
-        <h2>Emergency Alert!</h2>
-        <p><b>${user.name}</b> is requesting immediate assistance.</p>
-        <p><b>Location:</b> <a href="${locationLink}">View on Google Maps</a></p>
-      `,
+      html: `<h2>Emergency Alert!</h2><p><b>${user.name}</b> is requesting immediate assistance.</p><p><b>Location:</b> <a href="${locationLink}">View on Google Maps</a></p>`,
     };
-
     await transporter.sendMail(mailOptions);
     res.json({ message: "SOS Emails sent successfully!" });
   } catch (err) {
     console.error("SOS Email Error:", err);
-
-    // FETCH THE USER AGAIN TO GET PHONES IF THE TRY BLOCK FAILED LATE
     const user = await User.findById(userId);
     const phoneNumbers = user ? user.emergencyContacts.map((c) => c.phone) : [];
-
-    // Tell the app the email failed and provide the numbers for SMS
     res.status(500).json({
       error: "Email failed",
       fallbackToSms: true,
@@ -111,9 +109,7 @@ app.post("/trigger-sos", async (req, res) => {
   }
 });
 
-// Pass 'io' to the request object so routes can use it
 app.set("socketio", io);
-
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 
@@ -121,7 +117,7 @@ const MONGO_URI = process.env.MONGO_URI;
 app.use("/", authRoutes);
 app.use("/user", userRoutes);
 
-// --- SHARED UTILITY ROUTES (Maps/Places) ---
+// --- SHARED UTILITY ROUTES ---
 app.get("/places", async (req, res) => {
   const { lat, lng, type } = req.query;
   try {
@@ -168,23 +164,19 @@ app.get("/active-emergencies", async (req, res) => {
 io.on("connection", (socket) => {
   console.log(`🔌 User Connected: ${socket.id}`);
 
-  // Both Victim and Responder call this to enter the private room
   socket.on("join_emergency", (emergencyId) => {
     socket.join(emergencyId);
     console.log(`📡 Socket ${socket.id} joined room: ${emergencyId}`);
   });
 
-  // Handle Location Updates from Victim
   socket.on("update_location", (data) => {
-    // Expected data: { emergencyId: "...", lat: 1.23, lng: 4.56 }
-    socket.to(data.emergencyId).emit("location_received", {
-      latitude: data.lat,
-      longitude: data.lng,
-    });
+    socket
+      .to(data.emergencyId)
+      .emit("location_received", { latitude: data.lat, longitude: data.lng });
   });
 
-  // Handle Chat Messages
-  socket.on("send_message", (data) => {
+  socket.on("send_message", async (data) => {
+    // ADDED async
     const messagePayload = {
       emergencyId: data.emergencyId,
       text: data.text,
@@ -192,11 +184,15 @@ io.on("connection", (socket) => {
       timestamp: new Date(),
     };
 
-    // Use io.to() so the sender also gets a copy (helps with multi-device sync)
-    // or just socket.to() if you only want the "other" person to hear it.
-    io.to(data.emergencyId).emit("message_received", messagePayload);
+    // SAVE TO DATABASE
+    try {
+      const newMessage = new Message(messagePayload);
+      await newMessage.save();
+    } catch (e) {
+      console.error("Error saving message:", e);
+    }
 
-    console.log(`💬 Message in ${data.emergencyId}: ${data.text}`);
+    io.to(data.emergencyId).emit("message_received", messagePayload);
   });
 
   socket.on("disconnect", () => {
@@ -204,7 +200,6 @@ io.on("connection", (socket) => {
   });
 });
 
-// --- DATABASE & SERVER START ---
 if (MONGO_URI) {
   mongoose
     .connect(MONGO_URI)

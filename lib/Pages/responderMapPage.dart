@@ -40,7 +40,8 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   LatLng? _lastStart;
   LatLng? _lastNext;
   double? _lastBearing;
-  String _myResponderId = "ACTUAL_LOGGED_IN_ID";
+  String _myResponderId =
+      "ACTUAL_LOGGED_IN_ID"; // Replace with your actual user ID logic
 
   final String baseUrl = "https://emergenseek.onrender.com";
 
@@ -48,7 +49,32 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   void initState() {
     super.initState();
     _fetchVictimDetails();
+    _loadChatHistory(); // Load existing messages first
     _setupTrackingAndChat();
+  }
+
+  // --- NEW: Load Chat History from Server ---
+  Future<void> _loadChatHistory() async {
+    try {
+      final response = await http.get(
+        Uri.parse("$baseUrl/emergency/chat/${widget.activeEmergencyId}"),
+      );
+      if (response.statusCode == 200) {
+        final List<dynamic> history = jsonDecode(response.body);
+        setState(() {
+          _messages = history
+              .map(
+                (m) => {
+                  "text": m['message'] ?? m['text'],
+                  "isMe": m['senderId'] == _myResponderId,
+                },
+              )
+              .toList();
+        });
+      }
+    } catch (e) {
+      debugPrint("Error loading chat history: $e");
+    }
   }
 
   Future<void> _fetchVictimDetails() async {
@@ -81,14 +107,27 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     });
 
     _chatSubscription = SocketService().chatStream.listen((data) {
-      // Check if message belongs to this emergency
+      // Check if message belongs to this emergency and is not already in list
       if (mounted && data['emergencyId'] == widget.activeEmergencyId) {
         setState(() {
           _messages.add({
             "text": data['text'] ?? data['message'],
-            // Compare with actual logged-in ID instead of hardcoded string
             "isMe": data['senderId'] == _myResponderId,
           });
+
+          // Optional: Auto-expand chat or show notification if collapsed
+          if (!_isChatExpanded && data['senderId'] != _myResponderId) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text("New message from $_victimName"),
+                duration: const Duration(seconds: 2),
+                action: SnackBarAction(
+                  label: "View",
+                  onPressed: () => setState(() => _isChatExpanded = true),
+                ),
+              ),
+            );
+          }
         });
       }
     });
@@ -140,7 +179,6 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     if (_chatController.text.trim().isEmpty) return;
 
     final msg = _chatController.text.trim();
-    // Pass the actual responder ID here
     SocketService().sendMessage(widget.activeEmergencyId, msg, _myResponderId);
 
     setState(() {
@@ -258,6 +296,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     return Stack(
       children: [
         Scaffold(
+          resizeToAvoidBottomInset: false,
           appBar: AppBar(
             title: Text("Tracking $_victimName"),
             backgroundColor: Colors.redAccent,
@@ -299,7 +338,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(15),
-                      boxShadow: [
+                      boxShadow: const [
                         BoxShadow(
                           color: Colors.black26,
                           blurRadius: 10,
@@ -355,7 +394,6 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
                                 ],
                               ),
                               const SizedBox(height: 12),
-                              // COLLAPSED VS EXPANDED TOGGLE
                               AnimatedCrossFade(
                                 firstChild: Row(
                                   children: [
@@ -473,8 +511,8 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
                       child: FloatingActionButton(
                         onPressed: _makeDirectCall,
                         backgroundColor: Colors.green,
-                        child: const Icon(Icons.phone),
                         heroTag: "call_fab",
+                        child: const Icon(Icons.phone),
                       ),
                     ),
                     const SizedBox(height: 15),

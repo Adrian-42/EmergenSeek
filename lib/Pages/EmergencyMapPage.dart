@@ -32,6 +32,8 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
   GoogleMapController? mapController;
   Position? currentPosition;
   Timer? _socketTimer;
+  bool _showChatPopup = false;
+  String _lastMessageText = "";
 
   Set<Marker> markers = {};
   Set<Polyline> polylines = {};
@@ -58,6 +60,22 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     _loadUserData();
     _loadCachedPlaces();
     _initLocationTracking();
+
+    // ADD THIS: Listen for messages while the user is looking at the map
+    SocketService().chatStream.listen((data) {
+      // Only show the popup if the message is from someone else
+      if (mounted && data['senderId'] != _currentUserId) {
+        setState(() {
+          _lastMessageText = data['text'] ?? "New message received";
+          _showChatPopup = true;
+        });
+
+        // Automatically hide the notification after 7 seconds
+        Future.delayed(const Duration(seconds: 7), () {
+          if (mounted) setState(() => _showChatPopup = false);
+        });
+      }
+    });
   }
 
   // Load user data for chat and SOS
@@ -485,6 +503,68 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
       ),
       body: Stack(
         children: [
+          if (_showChatPopup)
+            Positioned(
+              top: 100, // Appears below the AppBar
+              left: 15,
+              right: 15,
+              child: GestureDetector(
+                onTap:
+                    _openChat, // Clicking the notification opens the chat page
+                child: Card(
+                  color: Colors.white,
+                  elevation: 10,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12.0,
+                      vertical: 8.0,
+                    ),
+                    child: Row(
+                      children: [
+                        const CircleAvatar(
+                          backgroundColor: Colors.blueAccent,
+                          child: Icon(
+                            Icons.chat,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text(
+                                "New Message",
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blueAccent,
+                                ),
+                              ),
+                              Text(
+                                _lastMessageText,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.black87),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 20),
+                          onPressed: () =>
+                              setState(() => _showChatPopup = false),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           GoogleMap(
             initialCameraPosition: const CameraPosition(
               target: LatLng(14.59, 120.98),
