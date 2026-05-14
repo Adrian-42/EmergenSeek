@@ -36,7 +36,6 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
-    // CHANGED: Use emergencyId as the roomId to match the responder side
     roomId = widget.emergencyId;
     _initializeChat();
   }
@@ -45,29 +44,36 @@ class _ChatPageState extends State<ChatPage> {
     final prefs = await SharedPreferences.getInstance();
     _currentUserName = prefs.getString('userName') ?? "Resident";
 
+    // Ensure socket is initialized and connected
     SocketService().initSocket(widget.currentUserId);
-    SocketService().socket.emit("join_private_chat", roomId);
+
+    // Give it a tiny delay to ensure connection before joining room
+    Future.delayed(const Duration(milliseconds: 500), () {
+      SocketService().socket.emit("join_private_chat", roomId);
+    });
+
     _loadChatHistory();
 
     SocketService().chatStream.listen((data) {
       if (mounted) {
+        // Broaden the check to catch either roomId or emergencyId from backend
         if (data['roomId'] == roomId || data['emergencyId'] == roomId) {
-          final incomingSenderId = data['senderId'].toString();
+          final incomingSenderId = data['senderId'] is Map
+              ? data['senderId']['_id'].toString()
+              : data['senderId'].toString();
 
-          // Check if this message is already in our list (by checking the last message text/time)
-          // Or simply check if it's from the other user.
           setState(() {
-            // If the message is from me, it might already be there from _handleSend.
-            // To avoid duplicates, we check if the ID matches.
             bool isMe = incomingSenderId == widget.currentUserId.toString();
 
-            // We only add if it's from the OTHER person.
-            // Your _handleSend already handles your own bubbles.
+            // Only add if it's from the OTHER person to avoid local duplicates
             if (!isMe) {
               _messages.insert(0, {
                 "text": data['text'] ?? data['message'] ?? "",
                 "isMe": false,
-                "timestamp": data['timestamp'] ?? DateTime.now().toString(),
+                "timestamp":
+                    data['timestamp'] ??
+                    data['createdAt'] ??
+                    DateTime.now().toIso8601String(),
               });
             }
           });
@@ -77,12 +83,13 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _loadChatHistory() async {
-    // CHANGED: Fetching history based on the Emergency ID endpoint to match responder
     final url = "$baseUrl/emergency/chat/${widget.emergencyId}";
     try {
       final response = await http
           .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 10));
+          .timeout(
+            const Duration(seconds: 15),
+          ); // Increased timeout for Render wake-up
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -90,16 +97,17 @@ class _ChatPageState extends State<ChatPage> {
           setState(() {
             _messages.clear();
             for (var item in data) {
-              // The backend for emergency chat usually uses 'message' or 'text'
-              // and might nest the senderId.
               final senderId = item['senderId'] is Map
                   ? item['senderId']['_id']
                   : item['senderId'];
 
               _messages.insert(0, {
-                "text": item['message'] ?? item['text'] ?? "",
+                "text": item['text'] ?? item['message'] ?? "",
                 "isMe": senderId.toString() == widget.currentUserId.toString(),
-                "timestamp": item['timestamp'] ?? item['createdAt'],
+                "timestamp":
+                    item['timestamp'] ??
+                    item['createdAt'] ??
+                    DateTime.now().toIso8601String(),
               });
             }
             _isLoadingHistory = false;
@@ -125,16 +133,17 @@ class _ChatPageState extends State<ChatPage> {
     });
 
     final payload = {
-      "roomId": roomId, // widget.emergencyId
-      "emergencyId": widget.emergencyId,
+      "emergencyId": widget.emergencyId, // Primary ID
       "senderId": widget.currentUserId,
-      "senderName": _currentUserName,
-      "receiverId": widget.otherUserId,
-      "text": text,
+      "text": text, // Responder listens for 'text'
+      "message": text, // Fallback for some schemas
       "timestamp": now,
     };
 
-    SocketService().sendPrivateMessage(payload);
+    if (SocketService().socket.connected) {
+      // Standardize this event name in your SocketService
+      SocketService().socket.emit("send_message", payload);
+    }
     _messageController.clear();
   }
 
@@ -214,7 +223,7 @@ class _ChatPageState extends State<ChatPage> {
                           DateTime dt = DateTime.parse(msg['timestamp']);
                           timeStr = DateFormat('hh:mm a').format(dt);
                         } catch (e) {
-                          timeStr = "";
+                          timeStr = "Just now";
                         }
 
                         return _buildChatBubble(msg['text'], isMe, timeStr);
@@ -309,6 +318,7 @@ class _ChatPageState extends State<ChatPage> {
                   filled: true,
                   fillColor: Colors.grey[100],
                 ),
+                onSubmitted: (_) => _handleSend(), // Send on keyboard 'enter'
               ),
             ),
             const SizedBox(width: 8),

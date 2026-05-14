@@ -138,65 +138,49 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     _chatSubscription = SocketService().chatStream.listen((data) {
       if (!mounted) return;
 
-      // Filter: Only add if it belongs to this emergency and IS NOT from me
-      if (data['emergencyId'] == widget.activeEmergencyId &&
-          data['senderId'] != _myResponderId) {
-        setState(() {
-          _messages.add({
-            "text": data['text'] ?? data['message'],
-            "isMe": false,
+      // 1. Extract Sender ID correctly (handle Map or String)
+      final incomingSenderId = data['senderId'] is Map
+          ? data['senderId']['_id'].toString()
+          : data['senderId'].toString();
+
+      // 2. Match the Emergency ID
+      if (data['emergencyId'] == widget.activeEmergencyId) {
+        // 3. Prevent duplicate UI entries from self
+        if (incomingSenderId != _myResponderId.toString()) {
+          setState(() {
+            _messages.add({
+              "text": data['text'] ?? data['message'] ?? "",
+              "isMe": false,
+            });
           });
-        });
-
-        // Auto-scroll for incoming messages
-        _scrollToBottom();
-
-        // Notify user if chat is collapsed
-        if (!_isChatExpanded) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("New message from $_victimName"),
-              duration: const Duration(seconds: 2),
-              action: SnackBarAction(
-                label: "View",
-                onPressed: () => setState(() => _isChatExpanded = true),
-              ),
-            ),
-          );
+          _scrollToBottom();
         }
       }
     });
   }
 
   void _sendMessage() {
-    if (_chatController.text.trim().isEmpty) return;
+    if (_chatController.text.trim().isEmpty || _myResponderId == null) return;
 
     final msg = _chatController.text.trim();
 
-    if (_myResponderId != null) {
-      // 1. Send to Socket
-      SocketService().sendMessage(
-        widget.activeEmergencyId,
-        msg,
-        _myResponderId!,
-      );
+    // Create a payload identical in structure to the Resident side
+    final payload = {
+      "emergencyId": widget.activeEmergencyId,
+      "senderId": _myResponderId,
+      "text": msg,
+      "timestamp": DateTime.now().toIso8601String(),
+    };
 
-      // 2. Update UI locally
-      setState(() {
-        _messages.add({
-          "text": msg,
-          "isMe": true,
-          "timestamp": DateTime.now()
-              .toIso8601String(), // Optional: add timestamp
-        });
-        _chatController.clear();
-      });
+    // Use the exact same socket emit event as the Resident side
+    SocketService().socket.emit("send_message", payload);
 
-      // 3. Force scroll to the new message
-      _scrollToBottom();
-    }
+    setState(() {
+      _messages.add({"text": msg, "isMe": true});
+      _chatController.clear();
+    });
+    _scrollToBottom();
   }
-  // --- MAP & NAVIGATION LOGIC (RETAINED) ---
 
   double _calculateDynamicSize(double zoom) {
     if (zoom >= 18) return 0.0001;
