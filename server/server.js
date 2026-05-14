@@ -6,8 +6,10 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
 const nodemailer = require("nodemailer");
+
+// Models
 const User = require("./models/User");
-const Message = require("./models/Message"); // ADDED: Message Model
+const Message = require("./models/Message");
 
 // Route Imports
 const authRoutes = require("./routes/auth");
@@ -33,14 +35,16 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Initialize Socket.io
+// --- SOCKET.IO INITIALIZATION ---
 const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE"],
   },
 });
+app.set("socketio", io);
 
+// --- EMAIL CONFIGURATION ---
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -49,14 +53,17 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// --- NEW: CHAT HISTORY ENDPOINT ---
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_API_KEY;
+const MONGO_URI = process.env.MONGO_URI;
+
+// --- API ROUTES ---
+
+// Chat History
 app.get("/emergency/chat/:emergencyId", async (req, res) => {
   try {
     const messages = await Message.find({ emergencyId: req.params.emergencyId })
-      .sort({ timestamp: -1 }) // Get newest 50
+      .sort({ timestamp: -1 })
       .limit(50);
-
-    // Reverse them so the oldest is at index 0 (top of the list)
     res.json(messages.reverse());
   } catch (err) {
     console.error("Chat History Error:", err);
@@ -64,13 +71,12 @@ app.get("/emergency/chat/:emergencyId", async (req, res) => {
   }
 });
 
-// --- NEW: RESPONDERS IN EMERGENCY ENDPOINT ---
+// Responders List
 app.get("/emergency/responders/:emergencyId", async (req, res) => {
   try {
     const responders = await Message.distinct("senderId", {
       emergencyId: req.params.emergencyId,
     });
-    // Optional: Fetch User details for these IDs to show names/photos
     const details = await User.find({ _id: { $in: responders } }).select(
       "name phoneNumber",
     );
@@ -80,7 +86,7 @@ app.get("/emergency/responders/:emergencyId", async (req, res) => {
   }
 });
 
-// --- SOS ROUTE ---
+// SOS Trigger
 app.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
   try {
@@ -128,15 +134,7 @@ app.post("/trigger-sos", async (req, res) => {
   }
 });
 
-app.set("socketio", io);
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_API_KEY;
-const MONGO_URI = process.env.MONGO_URI;
-
-// --- ROUTES ---
-app.use("/", authRoutes);
-app.use("/user", userRoutes);
-
-// --- SHARED UTILITY ROUTES ---
+// Google Places & Directions
 app.get("/places", async (req, res) => {
   const { lat, lng, type } = req.query;
   try {
@@ -162,6 +160,7 @@ app.get("/get-directions", async (req, res) => {
   }
 });
 
+// Active Emergencies
 app.get("/active-emergencies", async (req, res) => {
   try {
     const activeUsers = await User.find({ isSafe: false })
@@ -178,64 +177,65 @@ app.get("/active-emergencies", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch active emergencies" });
   }
 });
-// --- SOCKET.IO ONE-ON-ONE LOGIC ---
-socket.on("join_private_chat", (roomId) => {
-  socket.join(roomId);
-  console.log(`👤 Private Room Joined: ${roomId}`);
-});
 
-socket.on("send_private_message", async (data) => {
-  const messagePayload = {
-    roomId: data.roomId,
-    senderId: data.senderId,
-    receiverId: data.receiverId,
-    text: data.text,
-    timestamp: new Date(),
-  };
-
-  try {
-    const newMessage = new Message(messagePayload);
-    await newMessage.save();
-    // Emit only to the specific private room
-    io.to(data.roomId).emit("message_received", messagePayload);
-  } catch (e) {
-    console.error("Error saving private message:", e);
-  }
-});
+// Route Controllers
+app.use("/", authRoutes);
+app.use("/user", userRoutes);
 
 // --- SOCKET.IO REAL-TIME LOGIC ---
 io.on("connection", (socket) => {
   console.log(`🔌 User Connected: ${socket.id}`);
 
+  // 1. Private (One-on-One) Chat
+  socket.on("join_private_chat", (roomId) => {
+    socket.join(roomId);
+    console.log(`👤 Private Room Joined: ${roomId}`);
+  });
+
+  socket.on("send_private_message", async (data) => {
+    const messagePayload = {
+      roomId: data.roomId,
+      senderId: data.senderId,
+      receiverId: data.receiverId,
+      text: data.text,
+      timestamp: new Date(),
+    };
+    try {
+      const newMessage = new Message(messagePayload);
+      await newMessage.save();
+      io.to(data.roomId).emit("message_received", messagePayload);
+    } catch (e) {
+      console.error("Error saving private message:", e);
+    }
+  });
+
+  // 2. Emergency Room (Group) Chat
   socket.on("join_emergency", (emergencyId) => {
     socket.join(emergencyId);
     console.log(`📡 Socket ${socket.id} joined room: ${emergencyId}`);
   });
 
-  socket.on("update_location", (data) => {
-    socket
-      .to(data.emergencyId)
-      .emit("location_received", { latitude: data.lat, longitude: data.lng });
-  });
-
   socket.on("send_message", async (data) => {
-    // ADDED async
     const messagePayload = {
       emergencyId: data.emergencyId,
       text: data.text,
       senderId: data.senderId,
       timestamp: new Date(),
     };
-
-    // SAVE TO DATABASE
     try {
       const newMessage = new Message(messagePayload);
       await newMessage.save();
+      io.to(data.emergencyId).emit("message_received", messagePayload);
     } catch (e) {
       console.error("Error saving message:", e);
     }
+  });
 
-    io.to(data.emergencyId).emit("message_received", messagePayload);
+  // 3. Tracking & Disconnect
+  socket.on("update_location", (data) => {
+    socket
+      .to(data.emergencyId)
+      .emit("location_received", { latitude: data.lat, longitude: data.lng });
   });
 
   socket.on("disconnect", () => {
@@ -243,6 +243,7 @@ io.on("connection", (socket) => {
   });
 });
 
+// --- DATABASE & SERVER START ---
 if (MONGO_URI) {
   mongoose
     .connect(MONGO_URI)
