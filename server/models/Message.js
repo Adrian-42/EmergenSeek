@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+const mongoose = require("mongoose");
 
 const MessageSchema = new mongoose.Schema({
   emergencyId: { type: String, index: true },
@@ -10,4 +10,4 @@ const MessageSchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now },
 });
 
-const Message = mongoose.model("Message", MessageSchema);
+module.exports = Message;
