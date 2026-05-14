@@ -12,7 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:emergenseek/Pages/SettingsPage.dart';
 import 'package:emergenseek/Pages/safety_guide_page.dart';
-import 'package:emergenseek/Pages/ChatPage.dart';
+import 'package:emergenseek/Pages/ChatSelectorPage.dart';
 
 class EmergencyMapPage extends StatefulWidget {
   final bool isResponder;
@@ -425,9 +425,11 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ChatPage(
+        builder: (context) => ChatSelectorPage(
+          // FIX: Use 'activeEmergencyId' instead of 'emergencyId'
+          // and '_currentUserId' instead of 'currentUserId'
           emergencyId: roomToJoin,
-          currentUserId: _currentUserId ?? "unknown",
+          currentUserId: _currentUserId ?? "",
         ),
       ),
     );

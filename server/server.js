@@ -64,6 +64,22 @@ app.get("/emergency/chat/:emergencyId", async (req, res) => {
   }
 });
 
+// --- NEW: RESPONDERS IN EMERGENCY ENDPOINT ---
+app.get("/emergency/responders/:emergencyId", async (req, res) => {
+  try {
+    const responders = await Message.distinct("senderId", {
+      emergencyId: req.params.emergencyId,
+    });
+    // Optional: Fetch User details for these IDs to show names/photos
+    const details = await User.find({ _id: { $in: responders } }).select(
+      "name phoneNumber",
+    );
+    res.json(details);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch responders" });
+  }
+});
+
 // --- SOS ROUTE ---
 app.post("/trigger-sos", async (req, res) => {
   const { userId, locationLink } = req.body;
@@ -160,6 +176,30 @@ app.get("/active-emergencies", async (req, res) => {
     res.json(formattedEmergencies);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch active emergencies" });
+  }
+});
+// --- SOCKET.IO ONE-ON-ONE LOGIC ---
+socket.on("join_private_chat", (roomId) => {
+  socket.join(roomId);
+  console.log(`👤 Private Room Joined: ${roomId}`);
+});
+
+socket.on("send_private_message", async (data) => {
+  const messagePayload = {
+    roomId: data.roomId,
+    senderId: data.senderId,
+    receiverId: data.receiverId,
+    text: data.text,
+    timestamp: new Date(),
+  };
+
+  try {
+    const newMessage = new Message(messagePayload);
+    await newMessage.save();
+    // Emit only to the specific private room
+    io.to(data.roomId).emit("message_received", messagePayload);
+  } catch (e) {
+    console.error("Error saving private message:", e);
   }
 });
 
