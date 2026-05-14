@@ -234,26 +234,25 @@ io.on("connection", (socket) => {
   socket.on("send_private_message", async (data) => {
     const messagePayload = {
       roomId: data.roomId,
+      emergencyId: data.emergencyId || data.roomId, // Ensure this is saved!
       senderId: data.senderId,
       receiverId: data.receiverId,
-      text: data.text,
+      text: data.text || data.message, // Support both keys
       senderName: data.senderName,
       timestamp: new Date(),
     };
 
     try {
       const newMessage = new Message(messagePayload);
-      await newMessage.save();
+      await newMessage.save(); // This persists it to MongoDB
 
-      // Emit to the specific room (ChatPage)
+      // Emit to the specific room
       io.to(data.roomId).emit("message_received", messagePayload);
 
-      // FIX: Use backticks (`) for template literals so the ID is injected correctly
+      // Notification for the receiver
       io.emit(`new_notification_${data.receiverId}`, messagePayload);
 
-      console.log(
-        `✅ Message routed from ${data.senderId} to ${data.receiverId}`,
-      );
+      console.log(`✅ Message saved and routed from ${data.senderId}`);
     } catch (e) {
       console.error("❌ Error saving private message:", e);
     }

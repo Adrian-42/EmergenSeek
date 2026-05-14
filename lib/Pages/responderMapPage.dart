@@ -64,7 +64,8 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
   }
 
   void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Use a slight delay to allow the ListView to build the new item first
+    Future.delayed(const Duration(milliseconds: 100), () {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
@@ -137,6 +138,7 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
     _chatSubscription = SocketService().chatStream.listen((data) {
       if (!mounted) return;
 
+      // Filter: Only add if it belongs to this emergency and IS NOT from me
       if (data['emergencyId'] == widget.activeEmergencyId &&
           data['senderId'] != _myResponderId) {
         setState(() {
@@ -144,20 +146,24 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
             "text": data['text'] ?? data['message'],
             "isMe": false,
           });
-
-          if (!_isChatExpanded) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text("New message from $_victimName"),
-                duration: const Duration(seconds: 2),
-                action: SnackBarAction(
-                  label: "View",
-                  onPressed: () => setState(() => _isChatExpanded = true),
-                ),
-              ),
-            );
-          }
         });
+
+        // Auto-scroll for incoming messages
+        _scrollToBottom();
+
+        // Notify user if chat is collapsed
+        if (!_isChatExpanded) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("New message from $_victimName"),
+              duration: const Duration(seconds: 2),
+              action: SnackBarAction(
+                label: "View",
+                onPressed: () => setState(() => _isChatExpanded = true),
+              ),
+            ),
+          );
+        }
       }
     });
   }
@@ -167,22 +173,29 @@ class _ResponderMapPageState extends State<ResponderMapPage> {
 
     final msg = _chatController.text.trim();
 
-    // 1. Send to Socket
     if (_myResponderId != null) {
+      // 1. Send to Socket
       SocketService().sendMessage(
         widget.activeEmergencyId,
         msg,
         _myResponderId!,
       );
 
-      // 2. Update UI locally (This is your "isMe" message)
+      // 2. Update UI locally
       setState(() {
-        _messages.add({"text": msg, "isMe": true});
+        _messages.add({
+          "text": msg,
+          "isMe": true,
+          "timestamp": DateTime.now()
+              .toIso8601String(), // Optional: add timestamp
+        });
         _chatController.clear();
       });
+
+      // 3. Force scroll to the new message
+      _scrollToBottom();
     }
   }
-
   // --- MAP & NAVIGATION LOGIC (RETAINED) ---
 
   double _calculateDynamicSize(double zoom) {

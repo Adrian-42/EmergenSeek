@@ -46,24 +46,31 @@ class _ChatPageState extends State<ChatPage> {
     _currentUserName = prefs.getString('userName') ?? "Resident";
 
     SocketService().initSocket(widget.currentUserId);
-
-    // JOINing the emergency room to receive broadcasts
     SocketService().socket.emit("join_private_chat", roomId);
     _loadChatHistory();
 
     SocketService().chatStream.listen((data) {
       if (mounted) {
-        // Match against roomId (emergencyId)
         if (data['roomId'] == roomId || data['emergencyId'] == roomId) {
-          if (data['senderId'].toString() != widget.currentUserId.toString()) {
-            setState(() {
+          final incomingSenderId = data['senderId'].toString();
+
+          // Check if this message is already in our list (by checking the last message text/time)
+          // Or simply check if it's from the other user.
+          setState(() {
+            // If the message is from me, it might already be there from _handleSend.
+            // To avoid duplicates, we check if the ID matches.
+            bool isMe = incomingSenderId == widget.currentUserId.toString();
+
+            // We only add if it's from the OTHER person.
+            // Your _handleSend already handles your own bubbles.
+            if (!isMe) {
               _messages.insert(0, {
                 "text": data['text'] ?? data['message'] ?? "",
                 "isMe": false,
                 "timestamp": data['timestamp'] ?? DateTime.now().toString(),
               });
-            });
-          }
+            }
+          });
         }
       }
     });
@@ -118,17 +125,15 @@ class _ChatPageState extends State<ChatPage> {
     });
 
     final payload = {
-      "roomId": roomId, // The emergencyId
+      "roomId": roomId, // widget.emergencyId
       "emergencyId": widget.emergencyId,
       "senderId": widget.currentUserId,
       "senderName": _currentUserName,
       "receiverId": widget.otherUserId,
       "text": text,
-      "message": text,
       "timestamp": now,
     };
 
-    // FIX: Use the specific private message emitter
     SocketService().sendPrivateMessage(payload);
     _messageController.clear();
   }

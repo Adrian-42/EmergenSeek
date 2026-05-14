@@ -1,11 +1,9 @@
-const mongoose = require("mongoose");
-
 const MessageSchema = new mongoose.Schema({
-  emergencyId: { type: String, index: true }, // Optional for private chats
-  roomId: { type: String, index: true }, // Added for private chats
+  emergencyId: { type: String, index: true },
+  roomId: { type: String, index: true },
   senderId: { type: String, required: true },
-  receiverId: { type: String }, // Useful for private chats
+  senderName: { type: String }, // Add this
+  receiverId: { type: String },
   text: { type: String, required: true },
   timestamp: { type: Date, default: Date.now },
 });
-module.exports = mongoose.model("Message", MessageSchema);
