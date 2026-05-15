@@ -1,29 +1,26 @@
-const express = require("express");
-const router = express.Router();
-const User = require("../models/User");
-const bcrypt = require("bcrypt");
-const nodemailer = require("nodemailer");
+import express from "express";
+import User from "../models/User.js"; // Added .js extension
+import bcrypt from "bcryptjs"; // Switched to bcryptjs for consistency
+import nodemailer from "nodemailer";
 
-// Configure your nodemailer transporter
-// Note: Use an App Password if using Gmail, not your primary password.
-// Configure your nodemailer transporter
+const router = express.Router();
+
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 587,
-  secure: false, // Use false for 587, true for 465
+  secure: false,
   auth: {
-    user: "emergenseek000@gmail.com",
-    pass: "sjyc aqal opec psjh", // Use an App Password for Gmail
+    user: process.env.EMAIL_USER, // Better to use env variables
+    pass: process.env.EMAIL_PASS,
   },
   tls: {
-    // This helps if the server has trouble verifying the certificate
-    // or is forced into specific IPv4/IPv6 behavior
     rejectUnauthorized: false,
     minVersion: "TLSv1.2",
   },
-  connectionTimeout: 20000, // Increased to 20 seconds
+  connectionTimeout: 20000,
   greetingTimeout: 20000,
 });
+
 // 1. Get User Profile
 router.get("/:id", async (req, res) => {
   try {
@@ -83,11 +80,9 @@ router.put("/update-contacts", async (req, res) => {
 // 4. Change Password
 router.put("/change-password", async (req, res) => {
   const { userId, oldPassword, newPassword } = req.body;
-
   if (!userId || !oldPassword || !newPassword) {
     return res.status(400).json({ message: "All fields are required." });
   }
-
   try {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found." });
@@ -98,12 +93,10 @@ router.put("/change-password", async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
-
     await user.save({ validateModifiedOnly: true });
 
     res.status(200).json({ message: "Password updated successfully!" });
   } catch (error) {
-    console.error("🔥 Hashing/Database Error:", error.message);
     res.status(500).json({ message: error.message });
   }
 });
@@ -124,4 +117,4 @@ router.put("/update-phone", async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router; // Changed from module.exports

@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose"; // 1. Use import instead of require
 
 // Sub-schema for cleaner contact management
 const ContactSchema = new mongoose.Schema({
@@ -9,11 +9,7 @@ const ContactSchema = new mongoose.Schema({
 
 const userSchema = new mongoose.Schema(
   {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+    name: { type: String, required: true, trim: true },
     email: {
       type: String,
       required: true,
@@ -21,51 +17,23 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
-    password: {
-      type: String,
-      required: true,
-    },
-
-    // 1. Role-Based Access Control
-    role: {
-      type: String,
-      enum: ["victim", "responder"],
-      default: "victim",
-    },
-
-    phoneNumber: {
-      type: String,
-      default: "", // Using default empty string to avoid null issues
-    },
-
-    // 2. Emergency Status (Useful for responders to find active victims)
-    isEmergencyActive: {
-      type: Boolean,
-      default: false,
-    },
-
-    // 3. Persistent Emergency Contacts
+    password: { type: String, required: true },
+    role: { type: String, enum: ["victim", "responder"], default: "victim" },
+    phoneNumber: { type: String, default: "" },
+    isEmergencyActive: { type: Boolean, default: false },
     emergencyContacts: [ContactSchema],
-
-    // 4. Last Known Location (Updated via Sockets)
     lastLocation: {
       lat: { type: Number },
       lng: { type: Number },
       updatedAt: { type: Date, default: Date.now },
     },
-
-    // 5. FCM Token (For Push Notifications when app is backgrounded)
-    fcmToken: {
-      type: String,
-      default: null,
-    },
+    fcmToken: { type: String, default: null },
   },
-  {
-    timestamps: true, // Automatically adds createdAt and updatedAt
-  },
+  { timestamps: true },
 );
 
-// Indexing for faster location-based queries
 userSchema.index({ "lastLocation.lat": 1, "lastLocation.lng": 1 });
 
-module.exports = mongoose.model("User", userSchema);
+const User = mongoose.model("User", userSchema);
+
+export default User;

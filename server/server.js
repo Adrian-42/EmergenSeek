@@ -161,10 +161,11 @@ app.post("/trigger-sos", async (req, res) => {
     });
   } catch (err) {
     console.error("SOS Error:", err);
-    const user = await User.findById(userId);
-    const phones = user
-      ? user.emergencyContacts.map((c) => formatPHNumber(c.phone))
-      : [];
+    // Re-use the user object if it was already fetched in the try block
+    const phones =
+      user && user.emergencyContacts
+        ? user.emergencyContacts.map((c) => formatPHNumber(c.phone))
+        : [];
     res.status(500).json({
       error: "Process failed",
       fallbackToSms: true,
