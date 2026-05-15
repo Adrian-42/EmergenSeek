@@ -119,58 +119,33 @@ app.get("/emergency/responders/:emergencyId", async (req, res) => {
   }
 });
 
-// SOS Trigger
-app.post("/trigger-sos", async (req, res) => {
-  const { userId, locationLink } = req.body;
+// --- TRIGGER SOS ---
+router.post("/trigger-sos", async (req, res) => {
   try {
+    const { userId } = req.body;
+
+    // 1. Find the user and their emergency contacts
     const user = await User.findById(userId);
     if (
       !user ||
       !user.emergencyContacts ||
       user.emergencyContacts.length === 0
     ) {
-      return res.status(404).json({ error: "No contacts found" });
+      return res.status(404).json({ error: "No emergency contacts found." });
     }
 
-    const phoneNumbers = user.emergencyContacts
-      .map((c) => c.phone)
-      .filter((p) => p)
-      .map((p) => formatPHNumber(p));
+    // 2. Extract only the phone numbers
+    const phoneNumbers = user.emergencyContacts.map((contact) => contact.phone);
 
-    const recipientEmails = user.emergencyContacts
-      .map((c) => c.email)
-      .filter((email) => email)
-      .join(", ");
-
-    if (recipientEmails) {
-      const mailOptions = {
-        from: `"EmergenSeek" <${process.env.EMAIL_USER}>`,
-        to: recipientEmails,
-        subject: `🚨 EMERGENCY SOS - ${user.name} Needs Help!`,
-        html: `<h2>Emergency Alert!</h2>
-               <p><b>${user.name}</b> is requesting immediate assistance.</p>
-               <p><b>Location:</b> <a href="${locationLink}">View on Google Maps</a></p>`,
-      };
-      await transporter.sendMail(mailOptions);
-    }
-
-    res.json({
-      message: "SOS Processed",
-      emailSent: !!recipientEmails,
+    // 3. Return the numbers to Flutter
+    // Flutter will handle the actual "sending" via the native SMS app
+    res.status(200).json({
+      message: "Contacts retrieved",
       phoneNumbers: phoneNumbers,
     });
   } catch (err) {
-    console.error("SOS Error:", err);
-    // Re-use the user object if it was already fetched in the try block
-    const phones =
-      user && user.emergencyContacts
-        ? user.emergencyContacts.map((c) => formatPHNumber(c.phone))
-        : [];
-    res.status(500).json({
-      error: "Process failed",
-      fallbackToSms: true,
-      phoneNumbers: phones,
-    });
+    console.error("SOS Route Error:", err);
+    res.status(500).json({ error: "Server error retrieving contacts" });
   }
 });
 

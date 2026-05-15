@@ -209,7 +209,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
     _showSnackBar("🚨 Sending SOS Alerts...", Colors.red);
 
     final String googleMapsUrl =
-        "https://www.google.com/maps/search/?api=1&query=${currentPosition!.latitude},${currentPosition!.longitude}";
+        "https://www.google.com/maps?q=${currentPosition!.latitude},${currentPosition!.longitude}";
 
     try {
       final response = await http
