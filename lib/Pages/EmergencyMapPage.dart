@@ -683,22 +683,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
             ),
           ),
           // SOS Button
-          Positioned(
-            left: 20,
-            top: 450,
-            child: FloatingActionButton(
-              heroTag: "sos_alert",
-              backgroundColor: Colors.red,
-              onPressed: _sendSOSAlert,
-              child: const Text(
-                "SOS",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
+
           // Chat Button
           Positioned(
             right: 20,
