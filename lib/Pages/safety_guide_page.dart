@@ -3,6 +3,39 @@ import 'package:flutter/material.dart';
 class SafetyGuidePage extends StatelessWidget {
   const SafetyGuidePage({super.key});
 
+  final List<Map<String, dynamic>> _stationTips = const [
+    {
+      "title": "Hospital / Medical",
+      "icon": Icons.local_hospital,
+      "color": Colors.red,
+      "tips": [
+        "Apply pressure to any bleeding wounds using a clean cloth.",
+        "Do not move someone with a suspected neck or back injury.",
+        "Keep a list of your allergies and medications ready for the doctor.",
+      ],
+    },
+    {
+      "title": "Police Station",
+      "icon": Icons.local_police,
+      "color": Colors.blue,
+      "tips": [
+        "Stay in a well-lit, public area while waiting for a responder.",
+        "Take note of descriptions: height, clothing, or plate numbers.",
+        "Do not attempt to confront an armed individual yourself.",
+      ],
+    },
+    {
+      "title": "Fire Station",
+      "icon": Icons.local_fire_department,
+      "color": Colors.orange,
+      "tips": [
+        "Stay low to the ground to avoid inhaling toxic smoke.",
+        "Check doors for heat with the back of your hand before opening.",
+        "Once outside, stay outside. Never go back into a burning building.",
+      ],
+    },
+  ];
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -21,50 +54,95 @@ class SafetyGuidePage extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            "Your personal safety net in the palm of your hand. Follow these steps to ensure you're protected.",
+            "Connecting you to nearby responders and life-saving facilities in real-time.",
             style: TextStyle(color: Colors.grey[600], fontSize: 16),
           ),
           const SizedBox(height: 30),
 
+          // --- SECTION: STEPS ---
           _buildStep(
             number: "1",
-            title: "Configure Contacts",
+            title: "Find Nearby Help",
             desc:
-                "Go to Profile and add your trusted emergency contacts. We will notify them via email if you are in danger.",
-            icon: Icons.people_alt_outlined,
+                "Use the category buttons (Medical, Police, Fire) to find the nearest emergency facilities. Navigate directly to them with one tap.",
+            icon: Icons.map_outlined,
           ),
           _buildStep(
             number: "2",
-            title: "Trigger the SOS",
+            title: "Request Live Assistance",
             desc:
-                "In an emergency, press the large SOS button. It instantly sends your live Google Maps location to your contacts.",
-            icon: Icons.emergency_share,
+                "Switch your status to 'Help Needed'. This broadcasts your live location to active responders on the platform.",
+            icon: Icons.record_voice_over_outlined,
           ),
           _buildStep(
             number: "3",
-            title: "Stay or Move",
+            title: "Direct Responder Chat",
             desc:
-                "Once triggered, your location updates in real-time. Responders can track your movement to find you faster.",
-            icon: Icons.track_changes,
+                "Once a responder is assigned, tap the Chat icon. You can coordinate your rescue and send details through our private channel.",
+            icon: Icons.chat_bubble_outline,
           ),
           _buildStep(
             number: "4",
-            title: "Mark as Safe",
+            title: "Real-Time Tracking",
             desc:
-                "Once the danger has passed, tap 'I am Safe' to stop the broadcast and notify the system.",
-            icon: Icons.check_circle_outline,
+                "Responders see your live movement on their map. Keep the app open so they can find your exact position efficiently.",
+            icon: Icons.track_changes,
           ),
 
           const Divider(height: 50),
 
+          // --- SECTION: STATION REMINDERS ---
           const Text(
-            "💡 Expert Tips",
+            "🚨 Station-Specific Reminders",
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 15),
-          _buildTip("Keep your GPS on 'High Accuracy' mode."),
-          _buildTip("Ensure you have an active data plan for alerts."),
-          _buildTip("Tell your contacts to whitelist emails from our domain."),
+          ..._stationTips.map(
+            (station) => Card(
+              margin: const EdgeInsets.only(bottom: 10),
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                side: BorderSide(color: Colors.grey[200]!),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: ExpansionTile(
+                leading: Icon(station['icon'], color: station['color']),
+                title: Text(
+                  station['title'],
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                children: (station['tips'] as List<String>)
+                    .map(
+                      (t) => ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.arrow_right, size: 18),
+                        title: Text(t),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ),
+
+          const Divider(height: 50),
+
+          // --- SECTION: EXPERT TIPS ---
+          const Text(
+            "💡 Pro Safety Tips",
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 15),
+          _buildTip("Keep 'High Accuracy' GPS enabled for precise tracking."),
+          _buildTip(
+            "Check your data connection before requesting a responder.",
+          ),
+          _buildTip(
+            "Use the 'Navigate' button for the fastest route to a hospital.",
+          ),
+          _buildTip("Switch back to 'I am Safe' once help arrives."),
+          _buildTip(
+            "If a responder messages you, you will see a notification pop-up at the top of your map.",
+          ),
         ],
       ),
     );
@@ -82,7 +160,7 @@ class SafetyGuidePage extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CircleAvatar(
-            backgroundColor: Colors.redAccent,
+            backgroundColor: Colors.blueAccent,
             radius: 14,
             child: Text(
               number,
@@ -96,7 +174,7 @@ class SafetyGuidePage extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Icon(icon, size: 20, color: Colors.redAccent),
+                    Icon(icon, size: 20, color: Colors.blueAccent),
                     const SizedBox(width: 8),
                     Text(
                       title,
@@ -119,12 +197,22 @@ class SafetyGuidePage extends StatelessWidget {
 
   Widget _buildTip(String tip) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.bolt, color: Colors.orange, size: 20),
+          const Icon(
+            Icons.verified_user_outlined,
+            color: Colors.green,
+            size: 20,
+          ),
           const SizedBox(width: 10),
-          Expanded(child: Text(tip, style: const TextStyle(fontSize: 14))),
+          Expanded(
+            child: Text(
+              tip,
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+            ),
+          ),
         ],
       ),
     );

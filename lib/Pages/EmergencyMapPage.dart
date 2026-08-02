@@ -54,6 +54,12 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
 
   String? _currentUserId; // To store the logged-in user's ID
 
+  final List<String> _navigationReminders = [
+    "Keep your phone visible and stay aware of your surroundings.",
+    "A responder has been notified. Keep the chat open for updates.",
+    "Follow the suggested blue route to reach the station safely.",
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -570,7 +576,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           // Chat Notification Popup Layer
           if (_showChatPopup)
             Positioned(
-              top: 100, // Adjust based on your AppBar height
+              top: 10, // Adjust based on your AppBar height
               left: 15,
               right: 15,
               child: GestureDetector(
@@ -650,10 +656,90 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
               }
             },
           ),
+          if (!isSafe)
+            Positioned(
+              top: 130,
+              left: 15,
+              right: 15,
+              child: TweenAnimationBuilder(
+                duration: const Duration(milliseconds: 500),
+                tween: Tween<double>(begin: 0, end: 1),
+                builder: (context, double value, child) {
+                  return Opacity(
+                    opacity: value,
+                    child: Transform.translate(
+                      offset: Offset(0, (1 - value) * -10),
+                      child: child,
+                    ),
+                  );
+                },
+                child: Container(
+                  height: 80,
+                  child: Card(
+                    color: Colors.amber[50],
+                    elevation: 4,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: PageView.builder(
+                      itemCount: _navigationReminders.length,
+                      itemBuilder: (context, index) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 15,
+                            vertical: 10,
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.shield_outlined,
+                                color: Colors.orange,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      "Safety Tip ${index + 1}/3",
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.orange,
+                                      ),
+                                    ),
+                                    Text(
+                                      _navigationReminders[index],
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                        height: 1.2,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(
+                                Icons.swipe_left_outlined,
+                                size: 16,
+                                color: Colors.grey,
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
           // Safety Guide Button
           Positioned(
-            top: 80,
-            left: 10,
+            top: 50,
+            right: 10,
             child: GestureDetector(
               onTap: () => Navigator.push(
                 context,
@@ -698,7 +784,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           // Safety Status Toggle
           Positioned(
             left: 20,
-            top: 525,
+            top: 515,
             child: FloatingActionButton(
               heroTag: "status_toggle",
               backgroundColor: isSafe ? Colors.green : Colors.orange,
@@ -712,7 +798,7 @@ class _EmergencyMapPageState extends State<EmergencyMapPage> {
           // Recenter Button
           Positioned(
             right: 20,
-            top: 525,
+            top: 515,
             child: FloatingActionButton(
               heroTag: "loc",
               backgroundColor: Colors.white,
